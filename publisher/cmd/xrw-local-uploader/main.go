@@ -45,12 +45,18 @@ func main() {
 	snapshotDir := environment("LOCAL_SNAPSHOT_DIR", filepath.Join(dataDir, "batches"))
 	gitRepository := environment("LOCAL_GIT_REPOSITORY", filepath.Clean(filepath.Join(baseDir, "..", "..")))
 	address := environment("LOCAL_UPLOADER_ADDR", "127.0.0.1:8765")
+	features := localupload.ParseFeatures(environment("LOCAL_UPLOADER_DISABLE", ""))
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		fatal(err)
 	}
-	importToken, err := localupload.LoadOrCreateImportToken(filepath.Join(dataDir, "telegram-import-token"))
-	if err != nil {
-		fatal(err)
+	// A build without the userscript import has nothing to hand a pairing token
+	// to, and an empty token is also what refuses the ingest endpoints.
+	importToken := ""
+	if features.TelegramImport() {
+		importToken, err = localupload.LoadOrCreateImportToken(filepath.Join(dataDir, "telegram-import-token"))
+		if err != nil {
+			fatal(err)
+		}
 	}
 	imports, err := localupload.NewTelegramImportStore(filepath.Join(dataDir, "telegram-imports"), cfg.MaxImageBytes)
 	if err != nil {
@@ -58,6 +64,10 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if !features.TelegramImport() {
+		logger.Info("the Telegram userscript import is off in this build",
+			"reason", "LOCAL_UPLOADER_DISABLE=telegram-import")
+	}
 	proxyRequest, err := http.NewRequest(http.MethodGet, cfg.TGAPIBase, nil)
 	if err != nil {
 		fatal(err)
@@ -134,7 +144,7 @@ func main() {
 	server, err := localupload.NewServer(database, service, localupload.ServerOptions{
 		ChatIDs: cfg.TGChatIDs, SnapshotDir: snapshotDir,
 		Imports: imports, ImportToken: importToken,
-		Sites: siteRegistry, SiteImport: siteImporter,
+		Sites: siteRegistry, SiteImport: siteImporter, Features: features,
 	}, logger)
 	if err != nil {
 		fatal(err)

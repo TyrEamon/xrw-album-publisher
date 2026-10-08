@@ -256,6 +256,63 @@ func (s *Store) List(filter Filter) ([]Album, int, error) {
 	return append([]Album(nil), matched[start:end]...), total, nil
 }
 
+// Live reads one page of the listing straight from the site, so the browser can
+// show galleries before any index exists: a fresh install, or a site whose first
+// walk has not finished. It does not fill the cache — the walk is what builds the
+// index — so callers use it only while the cache is empty.
+//
+// The query and the category are handed to the source, and only a source that
+// can filter its own listing honours them: the HTML site reads a page of its
+// listing and returns the newest galleries regardless. Callers that must not
+// show unfiltered results therefore keep this for plain browsing.
+func (s *Store) Live(ctx context.Context, filter Filter) ([]Album, int, error) {
+	s.ensureLoaded()
+	perPage := filter.PerPage
+	if perPage < 1 || perPage > maxPageSize {
+		perPage = defaultPageSize
+	}
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	options := legacy.WPPostsOptions{
+		Page: page, PerPage: perPage,
+		OrderBy: "id", Order: "desc",
+		Search: strings.TrimSpace(filter.Query),
+	}
+	if filter.CategoryID > 0 {
+		options.Categories = []int{filter.CategoryID}
+	}
+	posts, info, err := s.source.Posts(ctx, options)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := info.Total
+	if total <= 0 && info.TotalPages > 0 {
+		total = info.TotalPages * perPage
+	}
+	if len(posts) == 0 {
+		return []Album{}, total, nil
+	}
+	covers, err := s.source.Covers(ctx, legacy.FeaturedIDs(posts))
+	if err != nil {
+		return nil, 0, err
+	}
+	albums := make([]Album, 0, len(posts))
+	for _, post := range posts {
+		albums = append(albums, albumFromPost(post, covers[post.FeaturedMedia]))
+	}
+	if total <= 0 {
+		// The source advertised no totals, so a full page is the only hint that
+		// another one follows.
+		total = (page-1)*perPage + len(albums)
+		if len(albums) >= perPage {
+			total += perPage
+		}
+	}
+	return albums, total, nil
+}
+
 // Verify measures how many images each album really carries and remembers the
 // numbers. The walk only sees the list view, which advertises the title's count
 // and cannot tell a complete gallery from a preview, so the browser asks for the

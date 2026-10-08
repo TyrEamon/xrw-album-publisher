@@ -26,6 +26,9 @@ import (
 //go:embed web/*
 var webFiles embed.FS
 
+// telegramImportScript is the userscript the page offers for download.
+const telegramImportScript = "/xrw-telegram-import.user.js"
+
 type ServerOptions struct {
 	ChatIDs     []string
 	SnapshotDir string
@@ -33,6 +36,9 @@ type ServerOptions struct {
 	ImportToken string
 	Sites       *sitealbum.Registry
 	SiteImport  *SiteImporter
+	// Features turns off the parts of the page a build has no use for. The zero
+	// value keeps every feature on.
+	Features Features
 }
 
 type Server struct {
@@ -45,6 +51,7 @@ type Server struct {
 	importToken string
 	sites       *sitealbum.Registry
 	siteImport  *SiteImporter
+	features    Features
 	imgSources  string
 	static      http.Handler
 }
@@ -87,7 +94,8 @@ func NewServer(store *Store, service *Service, options ServerOptions, logger *sl
 		store: store, service: service, logger: logger,
 		chatIDs: append([]string(nil), options.ChatIDs...), snapshotDir: options.SnapshotDir,
 		imports: options.Imports, importToken: options.ImportToken,
-		sites: options.Sites, siteImport: options.SiteImport, imgSources: imgSources,
+		sites: options.Sites, siteImport: options.SiteImport,
+		features: options.Features, imgSources: imgSources,
 		static: http.FileServer(http.FS(root)),
 	}, nil
 }
@@ -160,9 +168,15 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		response.Header().Set("X-Frame-Options", "DENY")
 		response.Header().Set("Referrer-Policy", "no-referrer")
 		response.Header().Set("Content-Security-Policy", "default-src 'self'; img-src "+s.imgSources+"; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
-		if s.isTelegramIngest(request) && !s.validImportToken(request.Header.Get("X-XRW-Import-Token")) {
-			writeError(response, http.StatusForbidden, errors.New("Telegram import token is invalid"))
-			return
+		if s.isTelegramIngest(request) {
+			if !s.features.TelegramImport() {
+				writeError(response, http.StatusForbidden, errors.New("这个版本没有开启 Telegram 油猴导入"))
+				return
+			}
+			if !s.validImportToken(request.Header.Get("X-XRW-Import-Token")) {
+				writeError(response, http.StatusForbidden, errors.New("Telegram import token is invalid"))
+				return
+			}
 		}
 		if request.Method != http.MethodGet && request.Method != http.MethodHead &&
 			!s.isTelegramIngest(request) && !sameOrigin(request) {
@@ -203,6 +217,12 @@ func (s *Server) staticFile(response http.ResponseWriter, request *http.Request)
 		http.NotFound(response, request)
 		return
 	}
+	if !s.features.TelegramImport() && strings.HasSuffix(request.URL.Path, telegramImportScript) {
+		// A build with the import turned off has nothing to pair the script with,
+		// so it does not hand the script out either.
+		http.NotFound(response, request)
+		return
+	}
 	response.Header().Set("Cache-Control", "no-store")
 	s.static.ServeHTTP(response, request)
 }
@@ -231,6 +251,7 @@ func (s *Server) state(response http.ResponseWriter, request *http.Request) {
 		"jobs":                  jobs,
 		"telegram_imports":      s.draftViews(imports),
 		"telegram_import_token": s.importToken,
+		"telegram_import":       s.features.TelegramImport(),
 		"site_albums":           s.siteStatus(),
 	})
 }
@@ -322,12 +343,26 @@ func (s *Server) siteAlbums(response http.ResponseWriter, request *http.Request)
 	page, _ := strconv.Atoi(query.Get("page"))
 	category, _ := strconv.Atoi(query.Get("category"))
 	perPage, _ := strconv.Atoi(query.Get("per_page"))
-	albums, total, err := target.Store.List(sitealbum.Filter{
+	filter := sitealbum.Filter{
 		Query: query.Get("q"), CategoryID: category, Page: page, PerPage: perPage,
-	})
+	}
+	albums, total, err := target.Store.List(filter)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, err)
 		return
+	}
+	// An empty cache is what a fresh install and a site whose first walk has not
+	// finished look like. Reading the page straight from the site then beats
+	// showing an empty grid with a "not built yet" note. A filtered request is
+	// left to the cache, because not every source can filter a live listing.
+	live := false
+	if total == 0 && filter.Query == "" && filter.CategoryID == 0 && target.Store.Status().BuiltAt == 0 {
+		liveAlbums, liveTotal, liveErr := target.Store.Live(request.Context(), filter)
+		if liveErr != nil {
+			writeError(response, http.StatusBadGateway, liveErr)
+			return
+		}
+		albums, total, live = liveAlbums, liveTotal, true
 	}
 	drafts, err := s.imports.List()
 	if err != nil {
@@ -361,7 +396,7 @@ func (s *Server) siteAlbums(response http.ResponseWriter, request *http.Request)
 	categories, tags := target.Store.Terms()
 	writeJSON(response, http.StatusOK, map[string]any{
 		"site": target.Site.ID, "albums": views, "total": total, "page": page, "per_page": perPage,
-		"categories": categories, "tags": tags, "status": s.siteStatus(),
+		"live": live, "categories": categories, "tags": tags, "status": s.siteStatus(),
 	})
 }
 

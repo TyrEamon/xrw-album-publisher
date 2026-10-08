@@ -109,6 +109,9 @@ class UploaderService : Service() {
             environment["LOCAL_UPLOADER_DATA_DIR"] = dataDir(this).absolutePath
             environment["LOCAL_SNAPSHOT_DIR"] = snapshotDir(this).absolutePath
             environment["LOCAL_GIT_REPOSITORY"] = "off"
+            // The Telegram Web userscript only runs in a desktop browser
+            // extension, so the phone build serves no pairing code for it.
+            environment["LOCAL_UPLOADER_DISABLE"] = "telegram-import"
             environment["HOME"] = filesDir.absolutePath
             environment["TMPDIR"] = cacheDir.absolutePath
             val started = builder.start()

@@ -361,6 +361,7 @@ function renderSiteStatus(statuses) {
       ? new Date(status.built_at * 1000).toLocaleString('zh-CN', { hour12: false })
       : '尚未建立';
     const parts = [`共 ${status.total || 0} 个图包`, `列表更新于 ${when}`];
+    if (siteStatus.dataset.live === '1') parts.push('实时直读源站');
     if (status.importing) parts.push(`${status.importing} 个正在导入`);
     if (status.error) parts.push(`上次失败：${clipText(status.error, 120)}`);
     siteStatus.textContent = parts.join(' · ');
@@ -436,6 +437,9 @@ function renderSiteCategories(categories) {
 function renderSiteAlbums(payload) {
   const albums = payload.albums || [];
   lastSitePayload = payload;
+  // The server reads straight from the site while its index is empty, and the
+  // count it reports is then only an estimate, so the status line says so.
+  siteStatus.dataset.live = payload.live ? '1' : '';
   const perPage = payload.per_page || 48;
   sitePageCount = Math.max(1, Math.ceil((payload.total || 0) / perPage));
   sitePage = payload.page || 1;
@@ -597,6 +601,7 @@ function renderState(state) {
   telegramChannels = state.chat_ids || [];
   fillChannels(channelSelect, telegramChannels, channelSelect.value);
   telegramToken.textContent = state.telegram_import_token || '连接码不可用';
+  applyTelegramImportFeature(state.telegram_import !== false);
   renderTelegramImports(state.telegram_imports || []);
   renderJobs(state.jobs || []);
   renderSiteStatus(state.site_albums);
@@ -604,6 +609,20 @@ function renderState(state) {
     const id = requestedTelegramDraft;
     requestedTelegramDraft = '';
     openTelegramImport(id);
+  }
+}
+
+// The Android build has no browser extension to run the userscript in, so it
+// turns the import off and the page drops the pairing code with it. The drafts
+// stay, because the gallery-site browser lands in the same list.
+function applyTelegramImportFeature(enabled) {
+  const connect = document.querySelector('#telegram-connect');
+  if (connect) connect.hidden = !enabled;
+  const hint = document.querySelector('#telegram-hint');
+  if (hint) {
+    hint.textContent = enabled
+      ? '站点图包和 Telegram Web 选择的内容都先落在这里，检查标题、标签和图片后再上传。'
+      : '站点图包选择的内容先落在这里，检查标题、标签和图片后再上传。';
   }
 }
 
