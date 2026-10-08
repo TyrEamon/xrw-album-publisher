@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+publisher_bin="${PUBLISHER_BIN:-/opt/xrw-publisher/xrw-publisher}"
+legacy_bin="${LEGACY_BIN:-/opt/xrw-publisher/xrw-legacy}"
+bucket_limit="${SNAPSHOT_BUCKET_MAX_PHOTOS:-1357200}"
+bucket_state="${SNAPSHOT_BUCKET_STATE:-/var/lib/xrw-publisher/snapshot-bucket}"
+
+bucket_roots=(
+  "${SNAPSHOT_REPO_DIR:-/var/lib/xrw-publisher/github-snapshot}"
+  "${SNAPSHOT_DATA_1_DIR:-/var/lib/xrw-publisher/github-data-1}"
+  "${SNAPSHOT_DATA_2_DIR:-/var/lib/xrw-publisher/github-data-2}"
+  "${SNAPSHOT_DATA_3_DIR:-/var/lib/xrw-publisher/github-data-3}"
+)
+bucket_branches=("${SNAPSHOT_BRANCH:-snapshot}" main main main)
+bucket_keys=(
+  "${SNAPSHOT_MAIN_KEY:-/var/lib/xrw-publisher/.ssh/github-snapshot}"
+  "${SNAPSHOT_DATA_1_KEY:-/var/lib/xrw-publisher/.ssh/github-data-1}"
+  "${SNAPSHOT_DATA_2_KEY:-/var/lib/xrw-publisher/.ssh/github-data-2}"
+  "${SNAPSHOT_DATA_3_KEY:-/var/lib/xrw-publisher/.ssh/github-data-3}"
+)
+
+if [[ ! "${bucket_limit}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "SNAPSHOT_BUCKET_MAX_PHOTOS must be a positive integer" >&2
+  exit 1
+fi
+
+bucket=0
+if [[ -f "${bucket_state}" ]]; then
+  bucket="$(tr -d '[:space:]' < "${bucket_state}")"
+fi
+if [[ ! "${bucket}" =~ ^[0-3]$ ]]; then
+  echo "invalid snapshot bucket state: ${bucket}" >&2
+  exit 1
+fi
+
+photo_count() {
+  python3 - "$1" <<'PY'
+import glob
+import json
+import os
+import sys
+
+photos_by_gallery = {}
+for filename in glob.glob(os.path.join(sys.argv[1], "*.json")):
+    with open(filename, "r", encoding="utf-8") as handle:
+        batch = json.load(handle)
+    for gallery in batch.get("galleries", []):
+        gallery_id = gallery.get("id")
+        if not gallery_id:
+            continue
+        photos = gallery.get("photos")
+        photos_by_gallery[gallery_id] = len(photos) if isinstance(photos, list) else int(gallery.get("count", 0))
+print(sum(photos_by_gallery.values()))
+PY
+}
+
+git_for_bucket() {
+  GIT_SSH_COMMAND="ssh -i ${bucket_keys[$bucket]} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" git "$@"
+}
+
+save_bucket() {
+  temporary="${bucket_state}.tmp"
+  printf '%s\n' "${bucket}" > "${temporary}"
+  mv "${temporary}" "${bucket_state}"
+}
+
+prepare_repo() {
+  local root="${bucket_roots[$bucket]}"
+  local branch="${bucket_branches[$bucket]}"
+  if [[ ! -d "${root}/.git" ]]; then
+    echo "snapshot repository is not initialized: ${root}" >&2
+    exit 1
+  fi
+  cd "${root}"
+  mkdir -p batches
+  if [[ "$(git branch --show-current)" != "${branch}" ]]; then
+    echo "snapshot repository is not on ${branch}: ${root}" >&2
+    exit 1
+  fi
+
+  # Preserve a batch created before a network interruption, then replay it on
+  # top of any harmless repository metadata updates before pushing.
+  git add -- batches
+  if ! git diff --cached --quiet; then
+    git -c user.name="xrw-publisher" -c user.email="xrw-publisher@users.noreply.github.com" \
+      commit -m "Update gallery snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+  git_for_bucket fetch origin "${branch}"
+  git rebase "origin/${branch}"
+  git_for_bucket push origin "${branch}"
+}
+
+prepare_repo
+current_count="$(photo_count "${bucket_roots[$bucket]}/batches")"
+while (( current_count >= bucket_limit && bucket < 3 )); do
+  bucket=$((bucket + 1))
+  save_bucket
+  prepare_repo
+  current_count="$(photo_count "${bucket_roots[$bucket]}/batches")"
+done
+
+snapshot_root="${bucket_roots[$bucket]}"
+snapshot_branch="${bucket_branches[$bucket]}"
+
+"${publisher_bin}" snapshot -out "${snapshot_root}/batches" -max 1000
+git add -- batches
+if ! git diff --cached --quiet; then
+  git -c user.name="xrw-publisher" -c user.email="xrw-publisher@users.noreply.github.com" \
+    commit -m "Update gallery snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+git_for_bucket push origin "${snapshot_branch}"
+
+current_count="$(photo_count "${snapshot_root}/batches")"
+if (( current_count >= bucket_limit && bucket < 3 )); then
+  bucket=$((bucket + 1))
+  save_bucket
+  echo "snapshot bucket sealed; next bucket=${bucket} photos=${current_count}"
+else
+  echo "snapshot bucket=${bucket} photos=${current_count} limit=${bucket_limit}"
+fi
+
+# Legacy albums replace records that still live in the website repository, so
+# their overlays and tombstones always belong to the website snapshot branch.
+if [[ -x "${legacy_bin}" ]]; then
+  legacy_root="${bucket_roots[0]}"
+  legacy_branch="${bucket_branches[0]}"
+  cd "${legacy_root}"
+  git add -- batches
+  if ! git diff --cached --quiet; then
+    git -c user.name="xrw-publisher" -c user.email="xrw-publisher@users.noreply.github.com" \
+      commit -m "Recover legacy gallery snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+  GIT_SSH_COMMAND="ssh -i ${bucket_keys[0]} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+    git fetch origin "${legacy_branch}"
+  git rebase "origin/${legacy_branch}"
+  "${legacy_bin}" snapshot -out "${legacy_root}/batches" -max 100
+  git add -- batches
+  if ! git diff --cached --quiet; then
+    git -c user.name="xrw-publisher" -c user.email="xrw-publisher@users.noreply.github.com" \
+      commit -m "Update legacy gallery snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+  GIT_SSH_COMMAND="ssh -i ${bucket_keys[0]} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+    git push origin "${legacy_branch}"
+fi

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">绮影志上传器</string>
+    <string name="notification_channel">上传器</string>
+    <string name="notification_text">本地服务运行中</string>
+</resources>

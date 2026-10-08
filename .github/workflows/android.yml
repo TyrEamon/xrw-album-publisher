@@ -1,0 +1,92 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - "publisher/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # No Gradle wrapper is committed (its jar is a binary), so the distribution is
+      # pinned here. 8.10.2 is the newest release inside the Kotlin 2.0.21 support
+      # window (KGP 2.0.20-2.0.21 covers Gradle 6.8.3-8.8, plus 8.9-8.10) while still
+      # satisfying AGP 8.7.3, which requires Gradle 8.9 or newer.
+      GRADLE_VERSION: "8.10.2"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: publisher/go.mod
+          cache-dependency-path: publisher/go.sum
+
+      # Android forbids executing files from the data directory, so the uploader is
+      # shipped as libxrwuploader.so inside jniLibs (see android/README.md).
+      - name: Build the uploader for arm64 Android
+        working-directory: publisher
+        run: |
+          mkdir -p ../android/app/src/main/jniLibs/arm64-v8a
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+            -o ../android/app/src/main/jniLibs/arm64-v8a/libxrwuploader.so ./cmd/xrw-local-uploader
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/gradle.zip" "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$HOME"
+          echo "$HOME/gradle-$GRADLE_VERSION/bin" >> "$GITHUB_PATH"
+
+      # Prints the resolved toolchain so a build failure can be read against the
+      # versions that actually ran.
+      - name: Show the toolchain versions
+        run: |
+          java -version
+          gradle --version
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID SDK root: $sdk_root"
+          echo "--- platforms ---"
+          ls "$sdk_root/platforms" || true
+          echo "--- build-tools ---"
+          ls "$sdk_root/build-tools" || true
+
+      - name: Build the debug APK
+        working-directory: android
+        run: |
+          set -o pipefail
+          gradle --no-daemon --console=plain --stacktrace assembleDebug 2>&1 \
+            | tee "$GITHUB_WORKSPACE/gradle-build.log"
+
+      # The real compiler/plugin error only shows up in the full Gradle output, so
+      # keep it as an artifact when the build fails.
+      - name: Upload the Gradle log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: gradle-build.log
+          if-no-files-found: warn
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: xrw-uploader-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

@@ -1,0 +1,8 @@
+[Unit]
+Description=Clean temporary XRW discovery overrides
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rm -f /etc/systemd/system/xrw-publisher-discovery.service.d/resume.conf
+ExecStart=/usr/bin/rm -f /etc/systemd/system/xrw-publisher-discovery.service.d/cleanup.conf
+ExecStart=/bin/systemctl daemon-reload

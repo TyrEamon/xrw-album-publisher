@@ -1,0 +1,18 @@
+[Unit]
+Description=Export and push XRW gallery snapshots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=xrw-publisher
+Group=xrw-publisher
+EnvironmentFile=/etc/xrw-publisher.env
+Environment=HOME=/var/lib/xrw-publisher
+Environment="GIT_SSH_COMMAND=ssh -i /var/lib/xrw-publisher/.ssh/github-snapshot -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+ExecStart=/usr/bin/flock -n /var/lib/xrw-publisher/snapshot-sync.lock /usr/local/bin/xrw-publisher-snapshot-sync
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xrw-publisher

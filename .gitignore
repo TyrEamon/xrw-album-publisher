@@ -1,0 +1,23 @@
+# Build output
+publisher/bin/
+publisher/work/
+publisher/local-uploader-data/
+publisher/publisher.db*
+
+# Local-only config (holds the bot token)
+publisher/.secrets/
+publisher/local-uploader.env
+publisher/.env
+publisher/.env.*
+!publisher/.env.example
+
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
+
+# Editors / OS
+.DS_Store
+Thumbs.db

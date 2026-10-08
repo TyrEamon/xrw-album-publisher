@@ -1,0 +1,21 @@
+[Unit]
+Description=XRW album one-time full discovery
+After=network-online.target sing-box.service
+Wants=network-online.target
+Requires=sing-box.service
+OnSuccess=xrw-publisher.service
+
+[Service]
+Type=oneshot
+User=xrw-publisher
+Group=xrw-publisher
+WorkingDirectory=/opt/xrw-publisher
+EnvironmentFile=/etc/xrw-publisher.env
+ExecStart=/opt/xrw-publisher/xrw-publisher discover -pages 0
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xrw-publisher

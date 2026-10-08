@@ -1,0 +1,11 @@
+[Unit]
+Description=Sync XRW gallery snapshots every 15 minutes
+
+[Timer]
+OnCalendar=*:02,17,32,47
+Persistent=true
+RandomizedDelaySec=30
+Unit=xrw-publisher-snapshot.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>绮影志 · 本地发布</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><i aria-hidden="true"></i><strong>绮影志</strong><span>LOCAL PUBLISHER</span></div>
+      <div id="connection" class="connection">正在连接本地服务…</div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">LOCAL TO TELEGRAM</p>
+          <h1 id="page-title">发布一套写真</h1>
+          <p class="lead">从本机文件夹读取原图和真实宽高，以文件形式上传频道；整套成功后再生成 Pages 快照。</p>
+        </div>
+        <button id="open-output" class="ghost" type="button">打开快照目录</button>
+      </section>
+
+      <div id="config-error" class="notice error" hidden></div>
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+      <section class="panel composer" aria-labelledby="composer-title">
+        <div class="section-heading">
+          <span>01</span>
+          <div><h2 id="composer-title">图集资料</h2><p>不会进行跨来源内容去重；每次创建都是独立任务。</p></div>
+        </div>
+        <form id="create-form">
+          <label class="field wide">
+            <span>写真文件夹</span>
+            <div class="folder-input">
+              <input id="folder" name="folder" required autocomplete="off" placeholder="D:\Pictures\一套写真">
+              <button id="pick-folder" class="secondary" type="button">选择文件夹</button>
+            </div>
+            <small>支持子文件夹；JPG、PNG、GIF、WebP 会按自然文件名顺序排列。</small>
+          </label>
+
+          <label class="field wide">
+            <span>图集名称</span>
+            <input id="title" name="title" autocomplete="off" placeholder="留空时使用文件夹名称">
+          </label>
+
+          <label class="field">
+            <span>分类</span>
+            <input id="category" name="category" autocomplete="off" placeholder="Cosplay">
+          </label>
+
+          <label class="field">
+            <span>目标频道</span>
+            <select id="channel" name="channel_id" required></select>
+          </label>
+
+          <label class="field wide">
+            <span>标签</span>
+            <textarea id="tags" name="tags" rows="3" placeholder="一行一个，或者使用逗号分隔"></textarea>
+          </label>
+
+          <div class="publish-row wide">
+            <p><strong>发布规则</strong><br>每 10 张一组，以文件发送；第一组写标题和标签，失败可继续上传。</p>
+            <button id="submit" class="primary" type="submit">建立任务并上传</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="jobs" id="site-section" aria-labelledby="site-title" hidden>
+        <div class="section-heading site-heading">
+          <span>02</span>
+          <div class="site-heading-text">
+            <h2 id="site-title">站点图包</h2>
+            <p id="site-status">浏览旧站已发布的图包；封面直接读源站，只有你勾选的才会下载。</p>
+          </div>
+          <div class="site-heading-actions">
+            <select id="site-picker" aria-label="选择站点" hidden></select>
+            <button id="site-toggle" class="ghost" type="button" aria-expanded="true" aria-controls="site-body">收起</button>
+          </div>
+        </div>
+        <div id="site-body">
+          <div class="site-toolbar panel">
+            <div class="site-search">
+              <input id="site-query" type="search" autocomplete="off" placeholder="搜索标题、slug 或链接">
+              <select id="site-category"><option value="">全部分类</option></select>
+            </div>
+            <label class="site-select-all" title="选中或取消本页所有可导入的图包">
+              <input id="site-select-all" type="checkbox"><span>本页全选</span>
+            </label>
+            <div class="site-actions">
+              <button id="site-refresh" class="secondary" type="button" title="按住 Shift 点击可重建整份列表">更新列表</button>
+              <button id="site-import" class="primary" type="button" disabled>导入所选</button>
+            </div>
+          </div>
+          <div id="site-empty" class="empty">还没有站点列表，点“更新列表”开始读取。</div>
+          <div id="site-grid" class="site-grid"></div>
+          <div class="site-pager" hidden>
+            <button id="site-prev" class="ghost" type="button">上一页</button>
+            <span id="site-page"></span>
+            <button id="site-next" class="ghost" type="button">下一页</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="jobs" aria-labelledby="telegram-title">
+        <div class="section-heading">
+          <span>03</span>
+          <div><h2 id="telegram-title">导入草稿</h2><p>站点图包和 Telegram Web 选择的内容都先落在这里，检查标题、标签和图片后再上传。</p></div>
+        </div>
+        <div class="telegram-connect panel">
+          <div>
+            <strong>油猴脚本连接码</strong>
+            <p>首次使用时复制连接码到脚本；连接码只保存在本机。</p>
+          </div>
+          <code id="telegram-token">等待本地服务…</code>
+          <button id="copy-telegram-token" class="secondary" type="button">复制连接码</button>
+          <a class="secondary install-script" href="/xrw-telegram-import.user.js">安装油猴脚本</a>
+        </div>
+        <div id="telegram-empty" class="empty">还没有 Telegram 导入草稿。</div>
+        <div id="telegram-list" class="telegram-list"></div>
+      </section>
+
+      <section class="jobs" aria-labelledby="jobs-title">
+        <div class="section-heading">
+          <span>04</span>
+          <div><h2 id="jobs-title">本地任务</h2><p>关闭程序不会丢失已成功上传的单张记录。</p></div>
+        </div>
+        <div id="empty" class="empty">还没有本地上传任务。</div>
+        <div id="job-list" class="job-list"></div>
+      </section>
+    </main>
+
+    <template id="job-template">
+      <article class="job-card">
+        <div class="thumbs" aria-hidden="true"></div>
+        <div class="job-body">
+          <div class="job-title-row">
+            <div><p class="job-id"></p><h3></h3></div>
+            <span class="badge"></span>
+          </div>
+          <p class="job-folder"></p>
+          <div class="progress" role="progressbar"><i></i></div>
+          <div class="job-meta"><span class="job-count"></span><span class="job-size"></span><span class="job-channel"></span></div>
+          <p class="job-error" hidden></p>
+          <div class="job-actions"><button class="retry secondary" type="button" hidden>重试未完成部分</button><span class="snapshot"></span></div>
+        </div>
+      </article>
+    </template>
+
+    <template id="site-template">
+      <article class="site-card">
+        <label class="site-cover">
+          <input type="checkbox" class="site-pick">
+          <img loading="lazy" decoding="async" alt="" referrerpolicy="no-referrer">
+          <span class="site-badge"></span>
+          <span class="site-flag" hidden></span>
+        </label>
+        <div class="site-body">
+          <h3></h3>
+          <p class="site-meta"></p>
+          <p class="site-error" hidden></p>
+          <div class="site-card-actions">
+            <a class="site-link" target="_blank" rel="noopener noreferrer">源站页面</a>
+            <button class="secondary site-open" type="button" hidden>打开草稿</button>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <template id="telegram-template">
+      <article class="telegram-card panel">
+        <div>
+          <p class="job-id telegram-id"></p>
+          <h3></h3>
+          <p class="telegram-source"></p>
+          <div class="telegram-summary"></div>
+        </div>
+        <div class="telegram-actions">
+          <button class="secondary edit-telegram" type="button">检查并导入</button>
+          <button class="ghost danger delete-telegram" type="button">删除草稿</button>
+        </div>
+      </article>
+    </template>
+
+    <dialog id="telegram-dialog">
+      <form id="telegram-form" method="dialog">
+        <div class="dialog-heading wide">
+          <div><p class="eyebrow">IMPORT DRAFT</p><h2>检查图集草稿</h2></div>
+          <button id="close-telegram" class="ghost" type="button" aria-label="关闭">关闭</button>
+        </div>
+        <input id="telegram-id" type="hidden">
+        <label class="field wide"><span>图集名称</span><input id="telegram-edit-title" required></label>
+        <label class="field"><span>分类</span><input id="telegram-edit-category" placeholder="Cosplay"></label>
+        <label class="field"><span>目标频道</span><select id="telegram-edit-channel" required></select></label>
+        <label class="field wide"><span>标签</span><textarea id="telegram-edit-tags" rows="3"></textarea></label>
+        <div class="telegram-media-heading wide">
+          <p id="telegram-selection-count"></p>
+          <small>点击图片可排除，再点一次可恢复；拖动图片可以调整上传顺序。</small>
+        </div>
+        <div id="telegram-media-grid" class="telegram-media-grid wide"></div>
+        <div class="publish-row wide">
+          <p id="telegram-dialog-source"></p>
+          <button id="commit-telegram" class="primary" type="submit">建立任务并上传</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

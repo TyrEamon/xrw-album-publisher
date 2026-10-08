@@ -1,0 +1,31 @@
+[Unit]
+Description=XRW legacy Telegraph mirror
+After=network-online.target xrw-publisher.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xrw-publisher
+Group=xrw-publisher
+WorkingDirectory=/opt/xrw-publisher
+EnvironmentFile=/etc/xrw-publisher.env
+Environment=LEGACY_DB=/var/lib/xrw-publisher/legacy.db
+Environment=LEGACY_SOURCE=/var/lib/xrw-publisher/linuxdo-85w.txt
+Environment=LEGACY_WORK_DIR=/var/lib/xrw-publisher/legacy-work
+Environment=LEGACY_WORKERS=3
+Environment=LEGACY_SOURCE_RETRIES=3
+Environment=LEGACY_RETRY_DELAY=30m
+Environment=TG_UPLOAD_INTERVAL=7s
+Environment=TG_GLOBAL_INTERVAL=1s
+Environment=TG_MAX_CONCURRENT=2
+ExecStart=/opt/xrw-publisher/xrw-legacy daemon -workers 3
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xrw-publisher
+
+[Install]
+WantedBy=multi-user.target
