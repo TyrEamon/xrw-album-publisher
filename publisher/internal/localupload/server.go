@@ -351,12 +351,13 @@ func (s *Server) siteAlbums(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusInternalServerError, err)
 		return
 	}
-	// An empty cache is what a fresh install and a site whose first walk has not
-	// finished look like. Reading the page straight from the site then beats
-	// showing an empty grid with a "not built yet" note. A filtered request is
+	// A cache with nothing in it is what a fresh install and a site whose walk has
+	// read nothing yet look like. Reading the page straight from the site then
+	// beats showing an empty grid with a "not built yet" note, and the status line
+	// drops the cached count and build time for that answer. A filtered request is
 	// left to the cache, because not every source can filter a live listing.
 	live := false
-	if total == 0 && filter.Query == "" && filter.CategoryID == 0 && target.Store.Status().BuiltAt == 0 {
+	if total == 0 && filter.Query == "" && filter.CategoryID == 0 {
 		liveAlbums, liveTotal, liveErr := target.Store.Live(request.Context(), filter)
 		if liveErr != nil {
 			writeError(response, http.StatusBadGateway, liveErr)

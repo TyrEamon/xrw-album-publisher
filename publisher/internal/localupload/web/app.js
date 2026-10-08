@@ -360,8 +360,12 @@ function renderSiteStatus(statuses) {
     const when = status.built_at
       ? new Date(status.built_at * 1000).toLocaleString('zh-CN', { hour12: false })
       : '尚未建立';
-    const parts = [`共 ${status.total || 0} 个图包`, `列表更新于 ${when}`];
-    if (siteStatus.dataset.live === '1') parts.push('实时直读源站');
+    // A live listing has no cached build time and its count is an estimate of what
+    // the site itself reports, so the cached numbers are left out.
+    const live = siteStatus.dataset.live === '1';
+    const parts = live
+      ? ['实时直读源站', `共 ${Number(siteStatus.dataset.liveTotal || 0)} 个图包`]
+      : [`共 ${status.total || 0} 个图包`, `列表更新于 ${when}`];
     if (status.importing) parts.push(`${status.importing} 个正在导入`);
     if (status.error) parts.push(`上次失败：${clipText(status.error, 120)}`);
     siteStatus.textContent = parts.join(' · ');
@@ -438,8 +442,10 @@ function renderSiteAlbums(payload) {
   const albums = payload.albums || [];
   lastSitePayload = payload;
   // The server reads straight from the site while its index is empty, and the
-  // count it reports is then only an estimate, so the status line says so.
+  // count it reports is then only an estimate, so the status line says so and
+  // takes the count from this payload instead of the cached status.
   siteStatus.dataset.live = payload.live ? '1' : '';
+  siteStatus.dataset.liveTotal = payload.live ? String(payload.total || 0) : '';
   const perPage = payload.per_page || 48;
   sitePageCount = Math.max(1, Math.ceil((payload.total || 0) / perPage));
   sitePage = payload.page || 1;
