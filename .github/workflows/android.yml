@@ -35,11 +35,15 @@ jobs:
 
       # Android forbids executing files from the data directory, so the uploader is
       # shipped as libxrwuploader.so inside jniLibs (see android/README.md).
+      # GOOS=android, not linux: only that build tag makes the Go runtime read the
+      # Android system trust store (/system/etc/security/cacerts) and emit a PIE
+      # binary. The same code built for linux gets an empty root pool and cannot
+      # verify one HTTPS certificate on the phone.
       - name: Build the uploader for arm64 Android
         working-directory: publisher
         run: |
           mkdir -p ../android/app/src/main/jniLibs/arm64-v8a
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
             -o ../android/app/src/main/jniLibs/arm64-v8a/libxrwuploader.so ./cmd/xrw-local-uploader
 
       - name: Set up Java

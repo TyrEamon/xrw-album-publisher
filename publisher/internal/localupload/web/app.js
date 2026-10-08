@@ -36,6 +36,7 @@ const siteSelectAll = document.querySelector('#site-select-all');
 let toastTimer;
 let lastJobs = '';
 let lastTelegramImports = '';
+let lastState = null;
 let telegramChannels = [];
 let requestedTelegramDraft = new URLSearchParams(location.search).get('telegram_import');
 let siteID = '';
@@ -634,21 +635,81 @@ function applyTelegramImportFeature(enabled) {
 
 async function refresh() {
   try {
-    renderState(await api('/api/state'));
+    lastState = await api('/api/state');
+    renderState(lastState);
   } catch {
     connection.textContent = '本地服务连接失败';
     connection.classList.remove('ready');
   }
 }
 
+// The Android shell installs a few native hooks. When they are present the page uses
+// them, because a phone has no folder dialog and no file manager that may open the
+// app's own private directory.
+function host() {
+  return window.XrwHost && typeof window.XrwHost.pickFolder === 'function' ? window.XrwHost : null;
+}
+
+function pickFolderOnHost() {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      window.XrwHostResult = null;
+      reject(new Error('系统文件夹选择器没有响应'));
+    }, 180000);
+    window.XrwHostResult = (payload) => {
+      clearTimeout(timer);
+      window.XrwHostResult = null;
+      if (payload && payload.path) resolve(payload.path);
+      else reject(new Error((payload && payload.message) || '没有选择文件夹'));
+    };
+    try {
+      host().pickFolder();
+    } catch (cause) {
+      clearTimeout(timer);
+      reject(cause);
+    }
+  });
+}
+
+function usePickedFolder(path) {
+  folderInput.value = path;
+  if (!titleInput.value.trim()) titleInput.value = path.split(/[\\/]/).filter(Boolean).at(-1) || '';
+}
+
+// The phone cannot hand a private app directory to a file manager, so the snapshot
+// button reports what is inside it and copies the path instead of opening anything.
+function showSnapshotOnHost() {
+  const path = (lastState && lastState.snapshot_dir) || '';
+  let info = {};
+  try {
+    info = JSON.parse(window.XrwHost.describeFolder(path));
+  } catch {
+    info = {};
+  }
+  if (!info.exists || !info.files) {
+    notify('还没有快照文件。');
+    return;
+  }
+  try {
+    window.XrwHost.copyText(path);
+  } catch {
+    // The message below still tells what is in there.
+  }
+  notify(`快照共 ${info.files} 个文件 · ${humanBytes(info.bytes)}，路径已复制到剪贴板`);
+}
+
+function applyHostLabels() {
+  if (!host()) return;
+  const openOutput = document.querySelector('#open-output');
+  if (openOutput) openOutput.textContent = '快照目录信息';
+  folderInput.placeholder = '/storage/emulated/0/Download/写真';
+}
+
 document.querySelector('#pick-folder').addEventListener('click', async (event) => {
   event.currentTarget.disabled = true;
   try {
-    const result = await api('/api/folders/pick', { method: 'POST' });
-    if (result.path) {
-      folderInput.value = result.path;
-      if (!titleInput.value.trim()) titleInput.value = result.path.split(/[\\/]/).filter(Boolean).at(-1) || '';
-    }
+    const path = host() ? await pickFolderOnHost() : (await api('/api/folders/pick', { method: 'POST' })).path;
+    if (path) usePickedFolder(path);
   } catch (cause) {
     notify(cause.message);
   } finally {
@@ -658,6 +719,10 @@ document.querySelector('#pick-folder').addEventListener('click', async (event) =
 
 document.querySelector('#open-output').addEventListener('click', async () => {
   try {
+    if (host()) {
+      showSnapshotOnHost();
+      return;
+    }
     await api('/api/snapshots/open', { method: 'POST' });
   } catch (cause) {
     notify(cause.message);
@@ -830,6 +895,7 @@ form.addEventListener('submit', async (event) => {
   }
 });
 
+applyHostLabels();
 applySiteCollapsed();
 refresh();
 setInterval(refresh, 2000);

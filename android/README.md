@@ -38,15 +38,19 @@ Android 10 起禁止执行应用数据目录里的文件，只有 `nativeLibrary
 本机有 Android SDK 也可以直接构建（需要 JDK 17 + Gradle 8.10.2）：
 
 ```bash
-# 1) 先生成 arm64 二进制
+# 1) 先生成 arm64 二进制（GOOS 必须是 android）
 cd publisher
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
+CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -trimpath -ldflags="-s -w" \
   -o ../android/app/src/main/jniLibs/arm64-v8a/libxrwuploader.so ./cmd/xrw-local-uploader
 
 # 2) 再打 APK
 cd ../android
 gradle assembleDebug
 ```
+
+`GOOS=android` 不能写成 `linux`：只有这个 build tag 会让 Go 运行时去读安卓的系统信任库
+（`/system/etc/security/cacerts`）并产出 PIE 可执行文件。同一份代码按 linux 编出来，根证书池
+是空的，手机上每个 HTTPS 请求都会以证书错误失败。
 
 ## 装到手机并配置
 
@@ -92,8 +96,10 @@ acgmhn 约 25 分钟），状态行会显示 `正在读取第 N/M 页图包列�
 - 上传器是**常驻前台服务**，通知栏会一直有一条「本地服务运行中」；退出 App 它还在跑。
   想彻底停掉：设置 → 应用 → 绮影志上传器 → 强行停止。
 - 图片全部从源站下载再传给 Telegram，流量走手机；一次导入几十张 = 几十 MB。
-- 电脑版界面里的「选文件夹」「打开快照目录」两个按钮在手机上没有对应动作，会报错；
-  手机版用不到它们（草稿和快照都在私有目录，直接看界面即可）。
+- 「选文件夹」在手机上会打开系统的文件夹选择器；选中的目录若不在共享存储、或 App 读不到，
+  会被复制一份进 App 私有目录再上传，所以选完可能要等一会儿。
+- 「快照」按钮在手机上不打开目录（安卓没有能打开应用私有目录的文件管理器），改成显示
+  快照里的文件数量，并顺手把路径复制到剪贴板。
 - 站点索引是纯文本，misskon 那份约 20 MB，读列表那段时间内存占用会高一些。
 - 只出了 `arm64-v8a` 一个 ABI，2016 年之后的手机基本都支持。
 - **没有油猴导入**：手机上没有浏览器扩展能跑那个脚本，所以手机版用

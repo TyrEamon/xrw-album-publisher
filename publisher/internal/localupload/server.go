@@ -253,6 +253,7 @@ func (s *Server) state(response http.ResponseWriter, request *http.Request) {
 		"telegram_import_token": s.importToken,
 		"telegram_import":       s.features.TelegramImport(),
 		"site_albums":           s.siteStatus(),
+		"platform":              runtime.GOOS,
 	})
 }
 
@@ -707,6 +708,11 @@ func (s *Server) pickFolder(response http.ResponseWriter, request *http.Request)
 }
 
 func chooseFolder(ctx context.Context) (string, error) {
+	if runtime.GOOS == "android" {
+		// The phone build answers this button inside the page with the system folder
+		// picker, so reaching here means the shell hooks are missing.
+		return "", errors.New("安卓版请在页面上用「选择文件夹」，或直接粘贴绝对路径")
+	}
 	if runtime.GOOS != "windows" {
 		return "", errors.New("folder picker currently supports Windows; paste an absolute path instead")
 	}
@@ -725,7 +731,7 @@ func (s *Server) openSnapshotFolder(response http.ResponseWriter, request *http.
 		return
 	}
 	if err := openFolder(request.Context(), s.snapshotDir); err != nil {
-		writeError(response, http.StatusInternalServerError, err)
+		writeError(response, http.StatusInternalServerError, fmt.Errorf("打开快照目录 %s 失败：%w", s.snapshotDir, err))
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]bool{"ok": true})
@@ -738,6 +744,10 @@ func openFolder(ctx context.Context, path string) error {
 		command = exec.CommandContext(ctx, "explorer.exe", path)
 	case "darwin":
 		command = exec.CommandContext(ctx, "open", path)
+	case "android":
+		// There is no file manager that may open an app's private directory, so the
+		// page reports what is inside it instead of asking for a viewer.
+		return errors.New("安卓上没有可以打开应用私有目录的文件管理器")
 	default:
 		command = exec.CommandContext(ctx, "xdg-open", path)
 	}
