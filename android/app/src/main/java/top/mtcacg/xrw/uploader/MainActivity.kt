@@ -134,7 +134,7 @@ class MainActivity : Activity() {
         }
         bar.addView(stateLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        val settings = Button(this).apply {
+        val configButton = Button(this).apply {
             text = "配置"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setOnClickListener { openConfigEditor() }
@@ -143,7 +143,7 @@ class MainActivity : Activity() {
                 true
             }
         }
-        bar.addView(settings, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        bar.addView(configButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val content = FrameLayout(this)
