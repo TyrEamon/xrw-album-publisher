@@ -1,0 +1,7 @@
+Say which uploader setting is actually missing
+
+The phone showed "TG_BOT_TOKEN and GIMG_PUBLIC_BASE are required" while
+GIMG_PUBLIC_BASE was already filled in: that string came from the disabled
+uploader check, which only means the bot token is empty. Name the token alone,
+let Validate() report the rest, and document that the phone also needs the chat
+ids and the signing secret.

@@ -94,7 +94,10 @@ func NewService(store *Store, uploader *telegram.Client, options Options, logger
 
 func (s *Service) Ready() error {
 	if !s.uploader.Enabled() {
-		return errors.New("TG_BOT_TOKEN and GIMG_PUBLIC_BASE are required")
+		// The uploader is disabled exactly when the bot token is empty, so name
+		// the one thing that is actually missing instead of also blaming the
+		// image base, which Validate reports separately when it is the culprit.
+		return errors.New("TG_BOT_TOKEN is missing")
 	}
 	return s.options.Validate()
 }
