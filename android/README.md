@@ -64,9 +64,11 @@ gradle assembleDebug
    GIMG_SIGNING_SECRET=<和图片 Worker 一致的那串密钥>
    ```
 
-   `GIMG_PUBLIC_BASE` 已经填好，其余保持默认即可：`HTTPS_PROXY=http://127.0.0.1:10808`
-   是手机上的代理端口，图和 Telegram 都要经它出去，手机上没有代理就把这两行删掉
-   或改成实际的地址。
+   `GIMG_PUBLIC_BASE` 已经填好，其余保持默认即可。**代理不用自己写**：启动上传器时
+   App 会读手机当前的代理设置（v2rayNG 的「系统代理」、VPN 自带的 HTTP 代理、
+   Wi-Fi 代理），读到就自动交给上传器，读不到（例如 VPN 的 TUN 模式）就直接连。
+   只有"手机在跑代理但没告诉系统"时才需要在配置里手写一行 `HTTPS_PROXY=...`。
+   三个图源站和 Telegram 在国内都得经代理才连得上。
 4. 点 **保存并重启**。**最省事的做法**：把电脑上的 `publisher/bin/local-uploader.env`
    拷到手机，用 **配置 → 从文件导入** 导入——三项一次填好，里面那些 `D:\...`
    路径会被 App 忽略。只填了一部分时界面会写「配置未完成」，提示语是固定文案，
@@ -89,7 +91,13 @@ acgmhn 约 25 分钟），状态行会显示 `正在读取第 N/M 页图包列�
 
 这几个变量由 App 直接写进子进程环境，配置文件里写也没用：
 `LOCAL_UPLOADER_ADDR`、`LOCAL_UPLOADER_DATA_DIR`、`LOCAL_SNAPSHOT_DIR`、
-`LOCAL_GIT_REPOSITORY=off`（**手机不推送快照分支**，快照只落在本机，要发布仍然在电脑上做）。
+`LOCAL_GIT_REPOSITORY=off`（**手机不推送快照分支**，快照只落在本机，要发布仍然在电脑上做）、
+`LOCAL_UPLOADER_DISABLE=telegram-import`。
+
+检测到系统代理时，App 还会注入 `HTTP_PROXY`/`HTTPS_PROXY` 和
+`NO_PROXY=localhost,127.0.0.1,::1`；检测不到就不注入，配置文件里手写的代理行仍然生效。
+实际用的是哪个代理会写进 `uploader.log`（长按「配置」能看到），顶栏状态文字也会显示
+「走系统代理」还是「直连」。
 
 ## 已知限制
 

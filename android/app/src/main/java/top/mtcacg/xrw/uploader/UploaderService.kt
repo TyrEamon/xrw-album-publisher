@@ -12,10 +12,15 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.ProxySelector
+import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -114,10 +119,22 @@ class UploaderService : Service() {
             environment["LOCAL_UPLOADER_DISABLE"] = "telegram-import"
             environment["HOME"] = filesDir.absolutePath
             environment["TMPDIR"] = cacheDir.absolutePath
+            // Follow whatever proxy the phone is using instead of pinning a port in the
+            // config file: v2rayNG's system proxy, a VPN's HTTP proxy and the Wi-Fi
+            // proxy all end up here. When the phone has no proxy at all (a TUN-style
+            // VPN) nothing is injected and the uploader connects directly, so a proxy
+            // line left in the config file stays a manual fallback.
+            val proxy = systemProxy()
+            if (proxy.isNotEmpty()) {
+                environment["HTTP_PROXY"] = proxy
+                environment["HTTPS_PROXY"] = proxy
+                environment["NO_PROXY"] = NO_PROXY
+            }
+            note(if (proxy.isEmpty()) "system proxy: none, connecting directly" else "system proxy: $proxy")
             val started = builder.start()
             child = started
             pump(started)
-            publish("本地服务运行中")
+            publish(if (proxy.isEmpty()) "本地服务运行中 · 直连" else "本地服务运行中 · 走系统代理")
         } catch (error: Exception) {
             publish("启动失败：${error.message}")
         }
@@ -157,6 +174,65 @@ class UploaderService : Service() {
             }
         } catch (_: InterruptedException) {
             running.destroyForcibly()
+        }
+    }
+
+    /**
+     * The proxy the phone is currently using, as a URL the uploader understands.
+     *
+     * The uploader is a Go program: Go reads HTTP_PROXY/HTTPS_PROXY and knows nothing
+     * about Android's proxy settings, so whatever the phone has configured is handed
+     * over as an environment variable. An empty result means "connect directly".
+     */
+    private fun systemProxy(): String {
+        // v2rayNG and friends publish the proxy they run locally in this setting.
+        try {
+            normalizeProxy(Settings.Global.getString(contentResolver, "http_proxy") ?: "")?.let { return it }
+        } catch (_: Exception) {
+        }
+        // A VPN that declares an HTTP proxy, or a per-network (Wi-Fi) proxy.
+        try {
+            val chosen = ProxySelector.getDefault()?.select(URI(PROBE_URL))?.firstOrNull()
+            val address = chosen?.address()
+            if (chosen != null && chosen.type() != Proxy.Type.DIRECT && address is InetSocketAddress && address.port > 0) {
+                return "http://${address.hostString}:${address.port}"
+            }
+        } catch (_: Exception) {
+        }
+        // Last resort: the Java properties Android mirrors the system proxy into.
+        try {
+            val host = System.getProperty("http.proxyHost")
+            val port = System.getProperty("http.proxyPort")
+            if (!host.isNullOrBlank() && !port.isNullOrBlank()) {
+                normalizeProxy("$host:$port")?.let { return it }
+            }
+        } catch (_: Exception) {
+        }
+        return ""
+    }
+
+    /** "127.0.0.1:10808" or "http://127.0.0.1:10808" -> a proxy URL; null when unusable. */
+    private fun normalizeProxy(value: String): String? {
+        val text = value.trim().trimEnd('/')
+        if (text.isEmpty() || text == ":0") {
+            return null
+        }
+        val url = if (text.contains("://")) text else "http://$text"
+        if (!url.substringAfter("://").contains(":")) {
+            return null
+        }
+        return url
+    }
+
+    /** Appends one line of app-side context to the log the child writes into. */
+    private fun note(text: String) {
+        try {
+            FileOutputStream(logFile(this), true).use { output ->
+                output.write("${stamp()} $text\n".toByteArray())
+                output.flush()
+            }
+        } catch (_: Exception) {
+            // Logging must never take the service down.
         }
     }
 
@@ -228,6 +304,12 @@ class UploaderService : Service() {
         private const val LOG_LIMIT = 2L * 1024L * 1024L
         private const val WATCH_INTERVAL = 5_000L
         private const val MAX_RESTARTS = 5
+
+        /** Asked through ProxySelector so a VPN's HTTP proxy shows up. */
+        private const val PROBE_URL = "https://api.telegram.org"
+
+        /** The uploader's own API and the Telegram API must never go through a proxy. */
+        private const val NO_PROXY = "localhost,127.0.0.1,::1"
 
         fun configFile(context: Context): File = File(context.filesDir, ENV_NAME)
 
