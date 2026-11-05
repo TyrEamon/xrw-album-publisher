@@ -180,6 +180,7 @@ dialog::backdrop { background: #050403d9; backdrop-filter: blur(7px); }
 .site-body { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 16px; min-width: 0; }
 .site-body h3 { margin: 0; font: 400 17px/1.35 Georgia, "Songti SC", serif; overflow-wrap: anywhere; }
 .site-meta { margin: 0; color: var(--muted); font-size: 12px; }
+.site-tags { margin: 0; color: var(--accent-2); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .site-error { margin: 0; color: #ffc0ba; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .site-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 6px; }
 .site-link { color: var(--muted); font-size: 12px; }

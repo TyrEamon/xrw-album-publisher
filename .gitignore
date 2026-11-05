@@ -7,6 +7,7 @@ publisher/publisher.db*
 # Local-only config (holds the bot token)
 publisher/.secrets/
 publisher/local-uploader.env
+local-uploader.env
 publisher/.env
 publisher/.env.*
 !publisher/.env.example

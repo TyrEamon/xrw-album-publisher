@@ -243,10 +243,18 @@ func (s *Server) state(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusInternalServerError, err)
 		return
 	}
+	// The next automatic channel is a preview for the page, so a store that
+	// cannot report it leaves the choice unlabelled instead of hiding the page.
+	nextChannel, err := s.service.NextAutoChannel(request.Context())
+	if err != nil {
+		s.logger.Warn("read the automatic channel turn", "error", err)
+		nextChannel = ""
+	}
 	writeJSON(response, http.StatusOK, map[string]any{
 		"configured":            configurationError == "",
 		"configuration_error":   configurationError,
 		"chat_ids":              s.chatIDs,
+		"next_channel":          nextChannel,
 		"snapshot_dir":          s.snapshotDir,
 		"jobs":                  jobs,
 		"telegram_imports":      s.draftViews(imports),
@@ -329,10 +337,27 @@ func (s *Server) resolveSite(response http.ResponseWriter, id string) (sitealbum
 // browser can offer "继续编辑" instead of importing the same gallery twice.
 type siteAlbumView struct {
 	sitealbum.Album
-	DraftID        string `json:"draft_id,omitempty"`
-	CommittedJobID string `json:"committed_job_id,omitempty"`
-	Importing      bool   `json:"importing,omitempty"`
-	Error          string `json:"error,omitempty"`
+	DraftID        string   `json:"draft_id,omitempty"`
+	CommittedJobID string   `json:"committed_job_id,omitempty"`
+	Importing      bool     `json:"importing,omitempty"`
+	Error          string   `json:"error,omitempty"`
+	TagNames       []string `json:"tag_names,omitempty"`
+	CategoryNames  []string `json:"category_names,omitempty"`
+}
+
+// pickNames translates term ids into the names the page shows, keeping the album's
+// own order and dropping ids this index no longer carries.
+func pickNames(names map[int]string, ids []int) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	picked := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if name := names[id]; name != "" {
+			picked = append(picked, name)
+		}
+	}
+	return picked
 }
 
 func (s *Server) siteAlbums(response http.ResponseWriter, request *http.Request) {
@@ -383,8 +408,11 @@ func (s *Server) siteAlbums(response http.ResponseWriter, request *http.Request)
 		}
 	}
 	views := make([]siteAlbumView, 0, len(albums))
+	categoryNames, tagNames := target.Store.Names()
 	for _, album := range albums {
 		view := siteAlbumView{Album: album}
+		view.TagNames = pickNames(tagNames, album.Tags)
+		view.CategoryNames = pickNames(categoryNames, album.Categories)
 		if draft, ok := byLink[album.Link]; ok {
 			view.DraftID = draft.ID
 			view.CommittedJobID = draft.CommittedJobID
@@ -395,10 +423,14 @@ func (s *Server) siteAlbums(response http.ResponseWriter, request *http.Request)
 		}
 		views = append(views, view)
 	}
-	categories, tags := target.Store.Terms()
+	// Only the categories travel: they fill the filter dropdown. The tags stay on the
+	// server, which is what translates the ids of each gallery into the names the
+	// cards show — a site with a couple of thousand tags would otherwise ride along
+	// with every two-second poll.
+	categories, _ := target.Store.Terms()
 	writeJSON(response, http.StatusOK, map[string]any{
 		"site": target.Site.ID, "albums": views, "total": total, "page": page, "per_page": perPage,
-		"live": live, "categories": categories, "tags": tags, "status": s.siteStatus(),
+		"live": live, "categories": categories, "status": s.siteStatus(),
 	})
 }
 

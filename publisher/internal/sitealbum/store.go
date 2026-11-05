@@ -208,6 +208,38 @@ func (s *Store) Terms() ([]Term, []Term) {
 	return append([]Term(nil), s.index.Categories...), append([]Term(nil), s.index.Tags...)
 }
 
+// Names returns the id → name maps of the cached taxonomies. An album only stores
+// term ids, so anything that shows a taxonomy to a person — the gallery card, the
+// tags prefilled into an import — has to translate through here.
+func (s *Store) Names() (categories, tags map[int]string) {
+	s.ensureLoaded()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return mapTermNames(s.index.Categories), mapTermNames(s.index.Tags)
+}
+
+// termNames is Names flattened into one lookup, which is what a search needs: the
+// query does not care whether a word is a category or a tag.
+func (s *Store) termNames() map[int]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	names := map[int]string{}
+	for _, group := range [][]Term{s.index.Categories, s.index.Tags} {
+		for id, name := range mapTermNames(group) {
+			names[id] = strings.ToLower(name)
+		}
+	}
+	return names
+}
+
+func mapTermNames(terms []Term) map[int]string {
+	names := make(map[int]string, len(terms))
+	for _, term := range terms {
+		names[term.ID] = term.Name
+	}
+	return names
+}
+
 // Get returns one cached album.
 func (s *Store) Get(id int) (Album, error) {
 	s.ensureLoaded()
@@ -226,12 +258,16 @@ func (s *Store) List(filter Filter) ([]Album, int, error) {
 	s.ensureLoaded()
 	albums := s.albums()
 	query := strings.ToLower(strings.TrimSpace(filter.Query))
+	var names map[int]string
+	if query != "" {
+		names = s.termNames()
+	}
 	matched := make([]Album, 0, len(albums))
 	for _, album := range albums {
 		if filter.CategoryID > 0 && !containsInt(album.Categories, filter.CategoryID) {
 			continue
 		}
-		if query != "" && !albumMatches(album, query) {
+		if query != "" && !albumMatches(album, query, names) {
 			continue
 		}
 		matched = append(matched, album)
@@ -506,7 +542,8 @@ func (s *Store) refresh(ctx context.Context, full bool) error {
 			}
 		}
 		if page == 1 || page%publishEveryPages == 0 {
-			if err := s.publish(byID, previous); err != nil {
+			categories, tags := s.termsWhileWalking(ctx, incremental, previous)
+			if err := s.publish(byID, previous, categories, tags); err != nil {
 				return err
 			}
 		}
@@ -529,10 +566,21 @@ func (s *Store) refresh(ctx context.Context, full bool) error {
 	}
 
 	now := time.Now().UTC()
+	// An incremental walk only reads the galleries it has not indexed yet, so a
+	// source that counts terms while walking (mitaku) answers with the handful of
+	// names those few pages mention. Taking that at face value would shrink the
+	// filter list to almost nothing on every refresh, so the names it no longer
+	// mentions keep the entry they already had.
+	categoryTerms := termList(categories)
+	tagTerms := termList(tags)
+	if incremental {
+		categoryTerms = carryTerms(categoryTerms, previous.Categories)
+		tagTerms = carryTerms(tagTerms, previous.Tags)
+	}
 	s.mu.Lock()
 	index := Index{
 		BuiltAt: now, RefreshedAt: now, Albums: sortAlbums(byID),
-		Categories: termList(categories), Tags: termList(tags),
+		Categories: categoryTerms, Tags: tagTerms,
 	}
 	if incremental {
 		index.BuiltAt = previous.BuiltAt
@@ -551,8 +599,10 @@ func (s *Store) refresh(ctx context.Context, full bool) error {
 // so the albums it has not reached yet are carried over from the previous index:
 // the list then only ever grows, instead of collapsing to the handful of pages
 // read so far and hiding everything the user was looking at. Categories and tags
-// only arrive once the walk is over, so a partial index keeps the ones it had.
-func (s *Store) publish(byID map[int]Album, previous Index) error {
+// only arrive once the walk is over, so a partial index keeps the ones it had —
+// unless the source counts terms while walking, in which case it hands over what
+// it has read so far.
+func (s *Store) publish(byID map[int]Album, previous Index, categories, tags []Term) error {
 	merged := make(map[int]Album, len(previous.Albums)+len(byID))
 	for _, album := range previous.Albums {
 		merged[album.ID] = album
@@ -569,6 +619,12 @@ func (s *Store) publish(byID map[int]Album, previous Index) error {
 		Tags:        previous.Tags,
 		Partial:     true,
 	}
+	if len(categories) > 0 {
+		index.Categories = categories
+	}
+	if len(tags) > 0 {
+		index.Tags = tags
+	}
 	if index.BuiltAt.IsZero() {
 		index.BuiltAt = index.RefreshedAt
 	}
@@ -578,14 +634,76 @@ func (s *Store) publish(byID map[int]Album, previous Index) error {
 	return s.save(index)
 }
 
-// sortAlbums orders the cache newest first, which is the order the site lists in.
+// localTerms marks a source whose Terms answers from counters the walk itself
+// filled in, so asking for them mid-walk costs nothing. A first mitaku walk runs
+// 911 pages for ten minutes, and a category filter that stays empty the whole
+// time reads as a broken screen, so such a source is asked on every partial
+// write. Sources that answer Terms with extra requests are left until the end.
+type localTerms interface{ TermsAreLocal() bool }
+
+// termsWhileWalking asks a walking source for its running taxonomy count. An
+// error only costs the partial screen its filter, so it never fails the walk.
+func (s *Store) termsWhileWalking(ctx context.Context, incremental bool, previous Index) ([]Term, []Term) {
+	source, ok := s.source.(localTerms)
+	if !ok || !source.TermsAreLocal() {
+		return nil, nil
+	}
+	categories, err := s.source.Terms(ctx, "categories", "count")
+	if err != nil {
+		return nil, nil
+	}
+	tags, err := s.source.Terms(ctx, "tags", "count")
+	if err != nil {
+		return nil, nil
+	}
+	categoryTerms, tagTerms := termList(categories), termList(tags)
+	if incremental {
+		categoryTerms = carryTerms(categoryTerms, previous.Categories)
+		tagTerms = carryTerms(tagTerms, previous.Tags)
+	}
+	return categoryTerms, tagTerms
+}
+
+// sortAlbums orders the cache newest first, which is the order the site lists in:
+// the published date, not the post id. An id only follows the date on a site that
+// never backdates or reissues a post, and mitaku does both — Hana Bunny's gallery
+// is the newest of the day while carrying a smaller id than galleries posted hours
+// earlier — so sorting by id puts the list in an order the site never shows.
 func sortAlbums(byID map[int]Album) []Album {
 	albums := make([]Album, 0, len(byID))
 	for _, album := range byID {
 		albums = append(albums, album)
 	}
-	sort.Slice(albums, func(left, right int) bool { return albums[left].ID > albums[right].ID })
+	sort.Slice(albums, func(left, right int) bool {
+		leftAt, leftDated := albumTime(albums[left].Date)
+		rightAt, rightDated := albumTime(albums[right].Date)
+		if leftDated && rightDated && !leftAt.Equal(rightAt) {
+			return leftAt.After(rightAt)
+		}
+		// A dated album lists before an undated one, and two galleries with the
+		// same (or no) date fall back to the id, which is stable across refreshes.
+		if leftDated != rightDated {
+			return leftDated
+		}
+		return albums[left].ID > albums[right].ID
+	})
 	return albums
+}
+
+// albumTime reads the publish timestamp a source reported. WordPress hands out
+// "2006-01-02T15:04:05" and mitaku a zoned RFC 3339 stamp, so both are tried; an
+// unreadable date is not fatal, it only falls back to the id.
+func albumTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02"} {
+		if at, err := time.Parse(layout, raw); err == nil {
+			return at, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // save writes the index atomically so a crash mid-write cannot truncate the cache.
@@ -660,14 +778,61 @@ func termList(terms []legacy.WPTerm) []Term {
 	return result
 }
 
-func albumMatches(album Album, query string) bool {
+// carryTerms merges the taxonomy a refresh answered with the one the index
+// already had. Names the fresh answer omits are kept, and a count never shrinks:
+// a source that tallies terms while walking only ever sees part of the site, so a
+// smaller number means "read fewer pages this time", not "this tag lost galleries".
+func carryTerms(fresh, previous []Term) []Term {
+	if len(previous) == 0 {
+		return fresh
+	}
+	known := make(map[string]int, len(previous))
+	for _, term := range previous {
+		known[strings.ToLower(term.Name)] = term.Count
+	}
+	seen := make(map[string]struct{}, len(fresh))
+	result := make([]Term, 0, len(fresh)+len(previous))
+	for _, term := range fresh {
+		key := strings.ToLower(term.Name)
+		seen[key] = struct{}{}
+		if count, ok := known[key]; ok && count > term.Count {
+			term.Count = count
+		}
+		result = append(result, term)
+	}
+	for _, term := range previous {
+		if _, ok := seen[strings.ToLower(term.Name)]; ok {
+			continue
+		}
+		result = append(result, term)
+	}
+	return result
+}
+
+// albumMatches reports whether a query of the search box appears in an album. The
+// taxonomy ids are resolved through names first: a gallery stores "Herta" only as
+// a number, and searching for the cosplayer is the whole point of the tags.
+func albumMatches(album Album, query string, names map[int]string) bool {
 	if strings.Contains(strings.ToLower(album.Title), query) {
 		return true
 	}
 	if strings.Contains(strings.ToLower(album.Slug), query) {
 		return true
 	}
-	return strings.Contains(strings.ToLower(album.Link), query)
+	if strings.Contains(strings.ToLower(album.Link), query) {
+		return true
+	}
+	for _, id := range album.Tags {
+		if strings.Contains(names[id], query) {
+			return true
+		}
+	}
+	for _, id := range album.Categories {
+		if strings.Contains(names[id], query) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsInt(values []int, target int) bool {

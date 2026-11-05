@@ -179,6 +179,14 @@ func TestSiteAlbumEndpointsBrowseAndQueueGalleries(t *testing.T) {
 	if listing.Albums[0].DraftID != "" || listing.Albums[0].Importing {
 		t.Fatalf("a fresh gallery should not look imported: %+v", listing.Albums[0])
 	}
+	// The card shows the gallery's tags, and an album only stores their ids, so the
+	// view has to carry the names alongside it.
+	if len(listing.Albums[0].TagNames) != 1 || listing.Albums[0].TagNames[0] != "Byoru" {
+		t.Fatalf("tags were not translated for the card: %+v", listing.Albums[0])
+	}
+	if len(listing.Albums[0].CategoryNames) != 1 || listing.Albums[0].CategoryNames[0] != "Cosplay" {
+		t.Fatalf("categories were not translated for the card: %+v", listing.Albums[0])
+	}
 	if len(listing.Categories) != 1 || listing.Categories[0].Name != "Cosplay" {
 		t.Fatalf("categories were not exposed: %+v", listing.Categories)
 	}
@@ -627,6 +635,60 @@ func TestStateReportsADraftThatIsStillBeingFilled(t *testing.T) {
 	if settled.Importing || settled.TargetCount != 0 {
 		t.Fatalf("a finished import should not claim its draft: %+v", settled)
 	}
+}
+
+func TestStateNamesTheNextAutomaticChannel(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	store, err := OpenStore(filepath.Join(directory, "local.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	imports, err := NewTelegramImportStore(filepath.Join(directory, "imports"), 20<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	channels := []string{"-100a", "-100b"}
+	service := NewService(store, telegram.New("http://127.0.0.1:1", "secret", "https://gimg.example", 0, 0, 1, time.Second), Options{
+		SnapshotDir: filepath.Join(directory, "batches"), ImageBase: "https://gimg.example",
+		SigningSecret: strings.Repeat("s", 32), MaxImageBytes: 20 << 20, ChatIDs: channels,
+	}, logger)
+	server, err := NewServer(store, service, ServerOptions{
+		ChatIDs: channels, SnapshotDir: filepath.Join(directory, "batches"),
+		Imports: imports, ImportToken: "pairing-token",
+	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The page offers the automatic turn as its first choice, so it has to know
+	// which channel that is before a task exists.
+	if next := stateNextChannel(t, server); next != "-100a" {
+		t.Fatalf("the cycle should start at -100a, got %q", next)
+	}
+	if _, err := store.TakeChannelTurn(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if next := stateNextChannel(t, server); next != "-100b" {
+		t.Fatalf("state should follow the spent turn, got %q", next)
+	}
+}
+
+func stateNextChannel(t *testing.T, server *Server) string {
+	t.Helper()
+	response := siteRequest(t, server.Handler(), http.MethodGet, "/api/state", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("state should answer 200, got %d", response.Code)
+	}
+	var state struct {
+		NextChannel string `json:"next_channel"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	return state.NextChannel
 }
 
 type stateDraft struct {

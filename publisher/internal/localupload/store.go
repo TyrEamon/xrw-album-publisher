@@ -58,7 +58,18 @@ CREATE INDEX IF NOT EXISTS idx_local_jobs_queue
   ON local_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_local_files_queue
   ON local_files(job_id, status, position);
+
+CREATE TABLE IF NOT EXISTS local_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `
+
+// channelTurnKey holds how many tasks have taken an automatic channel turn. It
+// lives in the database so the rotation continues where it stopped after a
+// restart, and it is deliberately separate from the jobs: naming a channel by
+// hand leaves the cycle untouched.
+const channelTurnKey = "channel_turn"
 
 type Store struct {
 	db *sql.DB
@@ -161,6 +172,49 @@ func (s *Store) RedactErrors(ctx context.Context, secrets ...string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ChannelTurn reports how many automatic tasks have already taken a turn, which
+// is what the page needs to show where the next one lands. A store that never
+// placed an automatic task reports zero.
+func (s *Store) ChannelTurn(ctx context.Context) (int64, error) {
+	var turn int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT CAST(value AS INTEGER) FROM local_meta WHERE key = ?
+`, channelTurnKey).Scan(&turn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return turn, err
+}
+
+// TakeChannelTurn returns the turn for the task being created and records that
+// it was used, so the next automatic task moves on to the following channel. The
+// read and the write share one transaction because the page may submit a second
+// task before the first response is drawn.
+func (s *Store) TakeChannelTurn(ctx context.Context) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var turn int64
+	err = tx.QueryRowContext(ctx, `
+SELECT CAST(value AS INTEGER) FROM local_meta WHERE key = ?
+`, channelTurnKey).Scan(&turn)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO local_meta (key, value) VALUES (?, '1')
+ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+`, channelTurnKey); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return turn, nil
 }
 
 func (s *Store) Create(ctx context.Context, job Job, files []File) error {

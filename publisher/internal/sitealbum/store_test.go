@@ -317,18 +317,19 @@ func TestRefreshBuildsIndexWithCoversAndTerms(t *testing.T) {
 	if total != 2 || len(albums) != 2 {
 		t.Fatalf("expected 2 albums, got %d of %d", len(albums), total)
 	}
-	// Newest gallery id first, matching the site's own listing order.
-	if albums[0].ID != 200 || albums[1].ID != 100 {
+	// Newest first by published date, which is the order the site itself lists in.
+	// The ids here run against it on purpose: alpha (100) is the newer gallery.
+	if albums[0].ID != 100 || albums[1].ID != 200 {
 		t.Fatalf("unexpected order: %d, %d", albums[0].ID, albums[1].ID)
 	}
-	if albums[0].Photos != 2 || albums[0].Videos != 1 {
-		t.Fatalf("title counters were not parsed: %+v", albums[0])
+	if albums[1].Photos != 2 || albums[1].Videos != 1 {
+		t.Fatalf("title counters were not parsed: %+v", albums[1])
 	}
-	if albums[0].CoverURL != site.server.URL+"/uploads/beta-2.webp" {
-		t.Fatalf("cover was not resolved: %q", albums[0].CoverURL)
+	if albums[1].CoverURL != site.server.URL+"/uploads/beta-2.webp" {
+		t.Fatalf("cover was not resolved: %q", albums[1].CoverURL)
 	}
-	if albums[0].Title != "Beta cosplay" {
-		t.Fatalf("title should be the cleaned prefix, got %q", albums[0].Title)
+	if albums[1].Title != "Beta cosplay" {
+		t.Fatalf("title should be the cleaned prefix, got %q", albums[1].Title)
 	}
 
 	album, err := store.Get(100)
@@ -391,14 +392,14 @@ func TestListFiltersAndPaginates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 2 || len(first) != 1 || first[0].ID != 200 {
+	if total != 2 || len(first) != 1 || first[0].ID != 100 {
 		t.Fatalf("page 1 wrong: %+v total=%d", first, total)
 	}
 	second, _, err := store.List(Filter{PerPage: 1, Page: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(second) != 1 || second[0].ID != 100 {
+	if len(second) != 1 || second[0].ID != 200 {
 		t.Fatalf("page 2 wrong: %+v", second)
 	}
 	beyond, _, err := store.List(Filter{PerPage: 1, Page: 9})
@@ -412,6 +413,38 @@ func TestListFiltersAndPaginates(t *testing.T) {
 	// A wildcard typed into the search box must stay a literal character.
 	if _, total, err := store.List(Filter{Query: "%"}); err != nil || total != 0 {
 		t.Fatalf("query should be literal, got total=%d err=%v", total, err)
+	}
+}
+
+// TestListFindsAnAlbumByItsTagsAndCategories covers the search box: an album only
+// stores taxonomy ids, so a query of "genshin" has to be resolved through the term
+// table or the tags are unreachable.
+func TestListFindsAnAlbumByItsTagsAndCategories(t *testing.T) {
+	site := sampleSite(t)
+	store := newTestStore(t, t.TempDir(), site)
+	if err := store.Refresh(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both galleries carry tag 11; the id itself never appears in the title or slug.
+	matched, total, err := store.List(Filter{Query: "genshin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(matched) != 2 {
+		t.Fatalf("tag search should match both galleries: %d of %d", len(matched), total)
+	}
+
+	matched, total, err = store.List(Filter{Query: "cosplay nude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || matched[0].ID != 100 {
+		t.Fatalf("category search should match the one gallery in it: %d of %d", len(matched), total)
+	}
+
+	if _, total, err := store.List(Filter{Query: "nothing here"}); err != nil || total != 0 {
+		t.Fatalf("unknown terms must not match: total=%d err=%v", total, err)
 	}
 }
 
@@ -605,6 +638,7 @@ func TestPartialIndexIsRebuiltWhole(t *testing.T) {
 	if err := store.publish(
 		map[int]Album{1: {ID: 1, Slug: "old", Title: "Old"}},
 		Index{BuiltAt: time.Now().Add(-time.Hour)},
+		nil, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -738,5 +772,118 @@ func TestRefreshWalksPastAPageWithNothingToImport(t *testing.T) {
 	// Two galleries before the video page, one after it.
 	if got := store.Status().Total; got != 3 {
 		t.Fatalf("a page with nothing to import must not end the walk, got %d albums", got)
+	}
+}
+
+// TestCarryTermsKeepsWhatAnIncrementalWalkCouldNotSee pins the taxonomy merge: a
+// source that counts terms while walking only reads the new galleries on a
+// refresh, so the tags the old pages mentioned must survive it untouched.
+func TestCarryTermsKeepsWhatAnIncrementalWalkCouldNotSee(t *testing.T) {
+	previous := []Term{
+		{ID: 1, Slug: "herta", Name: "Herta", Count: 24},
+		{ID: 2, Slug: "kisaki", Name: "Kisaki", Count: 12},
+		{ID: 3, Slug: "gone", Name: "Gone", Count: 3},
+	}
+	fresh := []Term{
+		{ID: 2, Slug: "kisaki", Name: "Kisaki", Count: 1},
+		{ID: 4, Slug: "citlali", Name: "Citlali", Count: 1},
+	}
+
+	merged := carryTerms(fresh, previous)
+	byName := map[string]Term{}
+	for _, term := range merged {
+		byName[term.Name] = term
+	}
+	// A tag the walk did not touch keeps its entry and its count.
+	if byName["Herta"].Count != 24 {
+		t.Fatalf("a tag the walk did not see must keep its count: %+v", byName["Herta"])
+	}
+	// A tag it did see can only be undercounted, never recounted in full.
+	if byName["Kisaki"].Count != 12 {
+		t.Fatalf("a count must not shrink because fewer pages were read: %+v", byName["Kisaki"])
+	}
+	if byName["Citlali"].Count != 1 {
+		t.Fatalf("a new tag is taken as it comes: %+v", byName["Citlali"])
+	}
+	if _, ok := byName["Gone"]; !ok {
+		t.Fatal("a full rebuild is what drops a term; a refresh keeps it")
+	}
+	if len(merged) != 4 {
+		t.Fatalf("expected the union without duplicates, got %+v", merged)
+	}
+}
+
+// walkingTermsSource wraps the WordPress fixture with mitaku's behaviour: Terms// answers from counters the walk filled in, so it can be asked mid-walk for free.
+type walkingTermsSource struct {
+	*legacy.WordPressSource
+	categories []legacy.WPTerm
+}
+
+func (s *walkingTermsSource) TermsAreLocal() bool { return true }
+
+func (s *walkingTermsSource) Terms(_ context.Context, taxonomy, _ string) ([]legacy.WPTerm, error) {
+	if taxonomy == "categories" {
+		return s.categories, nil
+	}
+	return nil, nil
+}
+
+// TestPartialIndexShowsTheCategoriesOfAWalkingSource pins the fill-in: a source
+// that counts categories while it reads must show them from the first published
+// page, because a first mitaku walk keeps the screen busy for ten minutes and an
+// empty filter for that long reads as a broken feature.
+func TestPartialIndexShowsTheCategoriesOfAWalkingSource(t *testing.T) {
+	site := newFakeSite(t)
+	site.posts = make([]fakePost, 0, refreshPerPage*2)
+	for index := 0; index < refreshPerPage*2; index++ {
+		id := 5000 - index
+		site.posts = append(site.posts, fakePost{
+			ID:    id,
+			Slug:  fmt.Sprintf("gallery-%d", id),
+			Title: rendered{Rendered: fmt.Sprintf("Gallery %d", id)},
+		})
+	}
+	// Page two dies, so the walk stops with only the first page published.
+	site.failAfter = 1
+
+	source := &walkingTermsSource{
+		WordPressSource: legacy.NewWordPressSource(site.server.URL, site.server.Client()),
+		categories:      []legacy.WPTerm{{ID: 3, Slug: "nude", Name: "Nude", Count: 12}},
+	}
+	store, err := NewStore(t.TempDir(), source, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Refresh(context.Background(), true); err == nil {
+		t.Fatal("the second page was meant to fail the walk")
+	}
+	categories, _ := store.Terms()
+	if len(categories) != 1 || categories[0].Name != "Nude" {
+		t.Fatalf("a walking source should fill the filter in mid-walk: %+v", categories)
+	}
+}
+
+// TestSortAlbumsFollowsThePublishDate pins the list order. A source can hand out
+// ids that do not follow its own dates — mitaku reissues and backdates posts, so
+// its newest gallery of the day carries a smaller id than one posted hours before
+// — and ordering by id would then disagree with the list the site itself shows.
+func TestSortAlbumsFollowsThePublishDate(t *testing.T) {
+	albums := sortAlbums(map[int]Album{
+		368051: {ID: 368051, Date: "2026-11-04T23:30:00-03:00"},
+		369128: {ID: 369128, Date: "2026-11-04T14:50:00-03:00"},
+		369632: {ID: 369632, Date: "2026-11-04T14:30:00-03:00"},
+		10:     {ID: 10, Date: "2026-11-04T14:30:00-03:00"},
+		9:      {ID: 9, Title: "未标日期"},
+	})
+
+	want := []int{368051, 369128, 369632, 10, 9}
+	if len(albums) != len(want) {
+		t.Fatalf("expected %d albums, got %d", len(want), len(albums))
+	}
+	for index, id := range want {
+		if albums[index].ID != id {
+			t.Fatalf("position %d should hold %d, got %d", index, id, albums[index].ID)
+		}
 	}
 }

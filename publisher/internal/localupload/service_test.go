@@ -116,6 +116,79 @@ func TestOptionsRequireSignedImageWorker(t *testing.T) {
 	}
 }
 
+func TestAutomaticChannelChoiceTakesTurns(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	photos := filepath.Join(directory, "photos")
+	if err := os.MkdirAll(photos, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestPNG(t, filepath.Join(photos, "1.png"), 4, 4)
+
+	path := filepath.Join(directory, "local.db")
+	database, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	channels := []string{"-100a", "-100b", "-100c"}
+	options := Options{
+		SnapshotDir: filepath.Join(directory, "batches"), ImageBase: "https://gimg.example",
+		SigningSecret: strings.Repeat("s", 32), MaxImageBytes: 20 << 20, ChatIDs: channels,
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service := NewService(database, telegram.New("http://127.0.0.1:1", "secret", "https://gimg.example", 0, 0, 1, time.Second), options, logger)
+
+	// Reading the turn must not spend it, or the page would skip a channel every
+	// time it polls.
+	for range 3 {
+		if next, err := service.NextAutoChannel(ctx); err != nil || next != "-100a" {
+			t.Fatalf("the cycle must start at -100a and stay there: next=%q err=%v", next, err)
+		}
+	}
+	for _, want := range []string{"-100a", "-100b", "-100c", "-100a"} {
+		job, err := service.Create(ctx, CreateRequest{Folder: photos, ChannelID: ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.ChannelID != want {
+			t.Fatalf("automatic task landed on %q instead of %q", job.ChannelID, want)
+		}
+	}
+	// Naming a channel sends that one task there and leaves the cycle where it is.
+	named, err := service.Create(ctx, CreateRequest{Folder: photos, ChannelID: "-100c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if named.ChannelID != "-100c" {
+		t.Fatalf("a named channel was ignored: %q", named.ChannelID)
+	}
+	auto, err := service.Create(ctx, CreateRequest{Folder: photos, ChannelID: AutoChannelID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auto.ChannelID != "-100b" {
+		t.Fatalf("the cycle did not continue at -100b: %q", auto.ChannelID)
+	}
+	if _, err := service.Create(ctx, CreateRequest{Folder: photos, ChannelID: "-999"}); err == nil {
+		t.Fatal("a channel that is not configured must be rejected")
+	}
+
+	// Restarting the program must not restart the rotation.
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restarted := NewService(reopened, telegram.New("http://127.0.0.1:1", "secret", "https://gimg.example", 0, 0, 1, time.Second), options, logger)
+	if next, err := restarted.NextAutoChannel(ctx); err != nil || next != "-100c" {
+		t.Fatalf("the rotation did not survive a restart: next=%q err=%v", next, err)
+	}
+}
+
 func writeTestPNG(t *testing.T, path string, width, height int) {
 	t.Helper()
 	file, err := os.Create(path)

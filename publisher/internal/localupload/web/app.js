@@ -2,6 +2,7 @@ const form = document.querySelector('#create-form');
 const folderInput = document.querySelector('#folder');
 const titleInput = document.querySelector('#title');
 const channelSelect = document.querySelector('#channel');
+const channelHint = document.querySelector('#channel-hint');
 const submitButton = document.querySelector('#submit');
 const configError = document.querySelector('#config-error');
 const connection = document.querySelector('#connection');
@@ -38,6 +39,7 @@ let lastJobs = '';
 let lastTelegramImports = '';
 let lastState = null;
 let telegramChannels = [];
+let nextChannel = '';
 let requestedTelegramDraft = new URLSearchParams(location.search).get('telegram_import');
 let siteID = '';
 let siteQuery = '';
@@ -101,14 +103,43 @@ function humanBytes(bytes) {
   return `${(bytes / (1024 ** index)).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
 }
 
+// The first entry of a channel select is the automatic turn: the server places
+// each task on the next configured channel, so nobody has to pick one per album.
+const AUTO_CHANNEL = 'auto';
+
 function fillChannels(select, chats, current = '') {
-  select.replaceChildren(...chats.map((chat, index) => {
-    const option = document.createElement('option');
-    option.value = chat;
-    option.textContent = `频道 ${index + 1} · ${chat}`;
-    return option;
-  }));
-  if (chats.includes(current)) select.value = current;
+  const entries = [];
+  // A single channel has nothing to rotate, so the choice is only offered when
+  // it can actually do something.
+  if (chats.length > 1) entries.push([AUTO_CHANNEL, autoChannelLabel()]);
+  chats.forEach((chat, index) => entries.push([chat, `频道 ${index + 1} · ${chat}`]));
+  // The page polls every two seconds, and rebuilding identical options would
+  // close a list the user has open, so the entries are compared first.
+  const signature = JSON.stringify(entries);
+  if (select.dataset.channels !== signature) {
+    select.dataset.channels = signature;
+    select.replaceChildren(...entries.map(([value, text]) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      return option;
+    }));
+  }
+  if (entries.some(([value]) => value === current)) select.value = current;
+}
+
+// The automatic turn is a rule rather than a guess, so the page names the
+// channel the next task will take instead of hiding the choice behind "auto".
+function autoChannelLabel() {
+  const index = telegramChannels.indexOf(nextChannel);
+  return index < 0 ? '自动轮换（下一个频道）' : `自动轮换 · 下次去 频道 ${index + 1}`;
+}
+
+function autoChannelHint() {
+  if (telegramChannels.length < 2) return '只配置了一个频道，所有任务都会发到这里。';
+  const index = telegramChannels.indexOf(nextChannel);
+  if (index < 0) return '自动轮换：每套依次换下一个频道；选定具体频道就只发那一个。';
+  return `自动轮换：下一套发到 频道 ${index + 1} · ${nextChannel}；选定具体频道就只发那一个。`;
 }
 
 const statusNames = {
@@ -490,6 +521,18 @@ function renderSiteAlbums(payload) {
     if (album.date) bits.push(album.date.slice(0, 10));
     card.querySelector('.site-meta').textContent = bits.join(' · ');
 
+    // The gallery's own tags, translated by the server: the cosplayer, the
+    // character and the game are what the caption ends up carrying, so it is worth
+    // seeing them before importing. Three fit on a card; the rest is a count.
+    const tagNames = album.tag_names || [];
+    const tagLine = card.querySelector('.site-tags');
+    if (tagNames.length) {
+      const shown = tagNames.slice(0, 3).map((name) => `#${name}`).join(' ');
+      tagLine.textContent = tagNames.length > 3 ? `${shown} +${tagNames.length - 3}` : shown;
+    } else {
+      tagLine.remove();
+    }
+
     const flag = card.querySelector('.site-flag');
     if (album.actual && album.photos && album.actual < album.photos) {
       flag.hidden = false;
@@ -606,6 +649,8 @@ function renderState(state) {
   configError.textContent = state.configured ? '' : `配置未完成：${state.configuration_error}`;
   submitButton.disabled = !state.configured;
   telegramChannels = state.chat_ids || [];
+  nextChannel = state.next_channel || '';
+  channelHint.textContent = autoChannelHint();
   fillChannels(channelSelect, telegramChannels, channelSelect.value);
   telegramToken.textContent = state.telegram_import_token || '连接码不可用';
   applyTelegramImportFeature(state.telegram_import !== false);
@@ -705,15 +750,19 @@ function applyHostLabels() {
   folderInput.placeholder = '/storage/emulated/0/Download/写真';
 }
 
-document.querySelector('#pick-folder').addEventListener('click', async (event) => {
-  event.currentTarget.disabled = true;
+// The listener outlives the click that started it, so it holds the button itself:
+// event.currentTarget is null once the await resumes and the finally block would
+// throw before it could switch the button back on.
+const pickFolderButton = document.querySelector('#pick-folder');
+pickFolderButton.addEventListener('click', async () => {
+  pickFolderButton.disabled = true;
   try {
     const path = host() ? await pickFolderOnHost() : (await api('/api/folders/pick', { method: 'POST' })).path;
     if (path) usePickedFolder(path);
   } catch (cause) {
     notify(cause.message);
   } finally {
-    event.currentTarget.disabled = false;
+    pickFolderButton.disabled = false;
   }
 });
 
@@ -885,6 +934,8 @@ form.addEventListener('submit', async (event) => {
     });
     notify(`已建立 ${job.total_files} 张图片的上传任务`);
     form.reset();
+    // Index 0 is the automatic turn, so the next album rotates again unless the
+    // channel was named on purpose.
     if (channelSelect.options.length) channelSelect.selectedIndex = 0;
     await refresh();
   } catch (cause) {

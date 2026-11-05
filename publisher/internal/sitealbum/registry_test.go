@@ -240,6 +240,7 @@ func TestRegistryPicksTheReadingStrategy(t *testing.T) {
 	alpha := sampleSite(t)
 	registry, err := NewRegistry(t.TempDir(), []Site{
 		{ID: "acgmhn", Name: "Acgmhn", BaseURL: alpha.server.URL, ImageSource: EngineAcgmhn},
+		{ID: "mitaku", Name: "Mitaku", BaseURL: alpha.server.URL, ImageSource: EngineMitaku},
 	}, discardLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -257,12 +258,29 @@ func TestRegistryPicksTheReadingStrategy(t *testing.T) {
 	if target.Site.ImageSource != EngineAcgmhn {
 		t.Fatalf("the site should report its engine: %q", target.Site.ImageSource)
 	}
+
+	// mitaku is a WordPress site with its REST API switched off, so naming its
+	// engine has to pick a reader that does not talk to /wp-json at all.
+	galleries, err := registry.Target("mitaku")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := galleries.Source.(*legacy.MitakuSource); !ok {
+		t.Fatalf("the mitaku engine should build the mitaku reader, got %T", galleries.Source)
+	}
+	if galleries.Store == nil {
+		t.Fatal("the mitaku site still needs its own index cache")
+	}
+	if galleries.Site.ImageSource != EngineMitaku {
+		t.Fatalf("the site should report its engine: %q", galleries.Site.ImageSource)
+	}
 }
 
 // TestImagesOutsideBase pins which strategies need the page to allow a bare
-// https: image source: only the media endpoint keeps its covers on the site.
+// https: image source: the media endpoint and the mitaku reader keep their covers
+// on the site itself.
 func TestImagesOutsideBase(t *testing.T) {
-	for _, engine := range []string{"", ImageSourceMedia} {
+	for _, engine := range []string{"", ImageSourceMedia, EngineMitaku} {
 		if ImagesOutsideBase(engine) {
 			t.Fatalf("%q keeps its covers on the site itself", engine)
 		}

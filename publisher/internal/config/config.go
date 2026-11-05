@@ -127,13 +127,14 @@ func (c Config) WordPressEnabled() bool {
 const defaultWordPressBase = "https://cosplaytele.com"
 
 // The image-source values XRW_WP_SITES accepts. They mirror
-// legacy.ImageSourceMedia, legacy.ImageSourceContent and legacy.EngineAcgmhn;
-// config deliberately does not import legacy, so the spellings are kept in step
-// by hand.
+// legacy.ImageSourceMedia, legacy.ImageSourceContent, legacy.EngineAcgmhn and
+// legacy.EngineMitaku; config deliberately does not import legacy, so the
+// spellings are kept in step by hand.
 const (
 	wordpressImageMedia   = "media"
 	wordpressImageContent = "content"
 	siteEngineAcgmhn      = "acgmhn"
+	siteEngineMitaku      = "mitaku"
 )
 
 // wordpressSites resolves the browsable gallery sites. XRW_WP_SITES accepts one
@@ -212,10 +213,12 @@ func parseWordPressSite(entry string) (WordPressSite, error) {
 	// and `id|name|url|content` both work.
 	if at+1 < len(parts) {
 		source := strings.ToLower(parts[at+1])
-		if source != wordpressImageMedia && source != wordpressImageContent && source != siteEngineAcgmhn {
+		if source != wordpressImageMedia && source != wordpressImageContent &&
+			source != siteEngineAcgmhn && source != siteEngineMitaku {
 			return WordPressSite{}, fmt.Errorf(
-				"XRW_WP_SITES entry %q has an unknown image source %q (use %s, %s or %s)",
-				entry, parts[at+1], wordpressImageMedia, wordpressImageContent, siteEngineAcgmhn)
+				"XRW_WP_SITES entry %q has an unknown image source %q (use %s, %s, %s or %s)",
+				entry, parts[at+1], wordpressImageMedia, wordpressImageContent,
+				siteEngineAcgmhn, siteEngineMitaku)
 		}
 		site.ImageSource = source
 	}

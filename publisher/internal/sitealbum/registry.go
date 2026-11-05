@@ -21,17 +21,21 @@ const ImageSourceContent = legacy.ImageSourceContent
 // paginated HTML. Also re-exported for callers that only see a Site.
 const EngineAcgmhn = legacy.EngineAcgmhn
 
+// EngineMitaku marks a WordPress site whose REST API is switched off, so its
+// galleries have to be read out of the rendered HTML as well.
+const EngineMitaku = legacy.EngineMitaku
+
 // ImageSourceMedia marks a site whose galleries come from the WordPress media
 // endpoint, which is where its covers live too.
 const ImageSourceMedia = legacy.ImageSourceMedia
 
 // ImagesOutsideBase reports whether a site's covers can live on hosts its base URL
 // never names, which the browser has to allow with a bare `https:` source. The
-// media endpoint keeps its images on the site itself; the other strategies
-// hotlink from a CDN or a separate image host.
+// media endpoint and the mitaku reader keep their images on the site itself; the
+// other strategies hotlink from a CDN or a separate image host.
 func ImagesOutsideBase(imageSource string) bool {
 	switch strings.ToLower(strings.TrimSpace(imageSource)) {
-	case "", ImageSourceMedia:
+	case "", ImageSourceMedia, EngineMitaku:
 		return false
 	default:
 		return true
@@ -47,8 +51,9 @@ type Site struct {
 	BaseURL string `json:"base_url"`
 	// ImageSource says how to read this site: the WordPress media endpoint
 	// (empty or "media"), the images inlined in a WordPress post ("content"), or
-	// a hand-rolled HTML site ("acgmhn"). See legacy.WordPressSource.ImageSource
-	// and legacy.NewAcgmhnSource.
+	// a hand-rolled HTML site ("acgmhn", "mitaku"). See
+	// legacy.WordPressSource.ImageSource, legacy.NewAcgmhnSource and
+	// legacy.NewMitakuSource.
 	ImageSource string `json:"image_source,omitempty"`
 }
 
@@ -129,8 +134,11 @@ func NewRegistry(directory string, sites []Site, logger *slog.Logger) (*Registry
 // newSource builds the reading strategy a site asked for. An unknown engine falls
 // back to WordPress, which is what every site used before engines existed.
 func newSource(engine, base string) Source {
-	if strings.EqualFold(strings.TrimSpace(engine), EngineAcgmhn) {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(engine), EngineAcgmhn):
 		return legacy.NewAcgmhnSource(base, nil)
+	case strings.EqualFold(strings.TrimSpace(engine), EngineMitaku):
+		return legacy.NewMitakuSource(base, nil)
 	}
 	source := legacy.NewWordPressSource(base, nil)
 	source.ImageSource = strings.TrimSpace(engine)

@@ -34,6 +34,10 @@ import (
 
 const uploadBatchSize = 10
 
+// AutoChannelID is the channel the page sends when the task should take the next
+// channel of the rotation instead of one that was named.
+const AutoChannelID = "auto"
+
 type Options struct {
 	SnapshotDir   string
 	ImageBase     string
@@ -163,9 +167,9 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Job, error
 	if title == "" {
 		title = filepath.Base(folder)
 	}
-	channelID := strings.TrimSpace(request.ChannelID)
-	if !contains(s.options.ChatIDs, channelID) {
-		return Job{}, errors.New("selected Telegram channel is not configured")
+	channelID, err := s.resolveChannel(ctx, request.ChannelID)
+	if err != nil {
+		return Job{}, err
 	}
 
 	id, numericID, err := newJobID()
@@ -188,6 +192,37 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Job, error
 	}
 	s.Notify()
 	return job, nil
+}
+
+// resolveChannel turns the page's choice into a configured channel. An empty or
+// automatic choice takes the next turn of the rotation, which keeps the albums
+// spread over every channel without anyone picking one for each task.
+func (s *Service) resolveChannel(ctx context.Context, requested string) (string, error) {
+	channelID := strings.TrimSpace(requested)
+	if channelID != "" && channelID != AutoChannelID {
+		if !contains(s.options.ChatIDs, channelID) {
+			return "", errors.New("selected Telegram channel is not configured")
+		}
+		return channelID, nil
+	}
+	turn, err := s.store.TakeChannelTurn(ctx)
+	if err != nil {
+		return "", err
+	}
+	return s.options.ChatIDs[turn%int64(len(s.options.ChatIDs))], nil
+}
+
+// NextAutoChannel reports the channel an automatic task would take next without
+// using the turn, so the page can name it before the task exists.
+func (s *Service) NextAutoChannel(ctx context.Context) (string, error) {
+	if len(s.options.ChatIDs) == 0 {
+		return "", nil
+	}
+	turn, err := s.store.ChannelTurn(ctx)
+	if err != nil {
+		return "", err
+	}
+	return s.options.ChatIDs[turn%int64(len(s.options.ChatIDs))], nil
 }
 
 func (s *Service) Retry(ctx context.Context, id string) error {

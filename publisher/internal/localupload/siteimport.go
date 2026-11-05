@@ -252,9 +252,18 @@ func (s *SiteImporter) runImport(ctx context.Context, request SiteImportRequest)
 	if title == "" {
 		title = album.Slug
 	}
+	// The gallery's own tags are the useful default: someone importing a cosplay
+	// set almost always wants the cosplayer and the character in the caption, and
+	// the import dialog lets them trim the list before publishing. Only a request
+	// that names its own tags — a batch import from the wall — overrides them.
+	tags := request.Tags
+	if len(tags) == 0 {
+		_, tagNames := target.Store.Names()
+		tags = pickNames(tagNames, album.Tags)
+	}
 	draft, err := s.drafts.Create(CreateTelegramImportRequest{
 		Kind: KindWordPress, SourceURL: album.Link, Title: title,
-		Category: request.Category, Tags: request.Tags,
+		Category: request.Category, Tags: tags,
 	})
 	if err != nil {
 		return TelegramImportDraft{}, err

@@ -174,7 +174,7 @@ Windows 上在 `publisher` 目录运行：
 - `TG_BOT_TOKEN` 与一个或多个 `TG_CHAT_IDS`。
 - 独立图片 Worker 的 `GIMG_PUBLIC_BASE`。
 - 与该 Worker 完全一致、至少32字符的 `GIMG_SIGNING_SECRET`。
-- 可选：`XRW_WP_BASE` 指向要浏览的 WordPress 站，默认 `https://cosplaytele.com`；填 `off` 隐藏“站点图包”区域。要浏览多个站就用 `XRW_WP_SITES`，写成一行、用逗号分隔，每个站写 `url`、`id|url`、`id|name|url` 或 `id|name|url|取图方式`；两种都设置时以 `XRW_WP_SITES` 为准。取图方式可选 `media`（默认，走 `media?parent=`，适合 cosplaytele.com 这类把套图当附件上传的站）、`content`（从正文的 `<img>` 里取图，适合 misskon.com 这类 `media?parent=` 只返回一张封面、套图内嵌在正文里的站）或 `acgmhn`（该站没有 API，直接读分页 HTML，适合 acgmhn.com 这类自研 CMS）。
+- 可选：`XRW_WP_BASE` 指向要浏览的 WordPress 站，默认 `https://cosplaytele.com`；填 `off` 隐藏“站点图包”区域。要浏览多个站就用 `XRW_WP_SITES`，写成一行、用逗号分隔，每个站写 `url`、`id|url`、`id|name|url` 或 `id|name|url|取图方式`；两种都设置时以 `XRW_WP_SITES` 为准。取图方式可选 `media`（默认，走 `media?parent=`，适合 cosplaytele.com 这类把套图当附件上传的站）、`content`（从正文的 `<img>` 里取图，适合 misskon.com 这类 `media?parent=` 只返回一张封面、套图内嵌在正文里的站）、`acgmhn`（该站没有 API，直接读分页 HTML，适合 acgmhn.com 这类自研 CMS）或 `mitaku`（WordPress 站但 `/wp-json` 整个关掉，同样只能读 HTML，适合 mitaku.net）。
 
 网页默认地址为 `http://127.0.0.1:8765/`。数据库和批次默认保存在 EXE 旁边的 `local-uploader-data`，因此把 `publisher/bin` 留在 D 盘就不会占用 C 盘项目空间。也可通过 `LOCAL_UPLOADER_DATA_DIR` 和 `LOCAL_SNAPSHOT_DIR` 指向其他绝对路径。
 
@@ -205,6 +205,8 @@ Windows 上在 `publisher` 目录运行：
 `content` 图片源的源站标题经常夸大张数（misskon.com 的套图大多只在正文里放 12 或 24 张预览，标题却写着 111 张），光看标题分不清“完整”和“被截断”。所以列表把两种数都显示出来：读不到真实张数时只显示标题的数，量过之后对得上的显示真实数、对不上的显示“真实 / 标题”并在封面上挂一个“不全”角标。真实张数由 `POST /api/site-albums/verify` 提供，它把一页图包的 id 拼成一次 `include=` 请求（每批最多 100 个，接口每次最多收 120 个）读出正文里真实的图片数，结果写回索引的 `actual` 字段。已经量过的图包不会再请求；标题变了（张数或修改时间变了）就重新量。`media` 图片源的站点没有这个问题，接口直接返回空结果。
 
 `acgmhn` 取图方式的站点（acgmhn.com 的写真栏）没有 REST API，索引和取图都读 HTML：列表是 `/cos/`、`/cos/index-N.html`，每页 36 条，条目的 `<span class="pagenum">` 就是真实张数（视频条的同一位置是 `00:07` 这种时长，会被过滤掉），所以这些站不会有“不全”的问题，也不提供 `verify`。取图走站点的轻量接口 `/ajax_cos/<id>[-N].html?ajax=1`，一次返回一张图的地址和翻页信息，站点因此把请求限到大约每秒一次：读取每张图之间有 1 秒间隔，429 和 5xx 会按 1/2/4/8 秒退避重试。这个站的封面和图片在 `m.acgnfl.com`，所以页面的图片策略会放宽到允许任意 `https:` 来源。全量扫描约 1,005 页、3.6 万个图包，按限速大约要跑几十分钟，但边走边写让它扫描期间就能用。
+
+`mitaku` 取图方式的站点（mitaku.net）用的也是 WordPress，但 `/wp-json` 被整个关掉（返回 `rest_disabled`），所以索引和取图都读 HTML：列表是 `/category/ero-cosplay/page/N/` 和 `/category/sexy-set/page/N/`，每页 9 条，两个分类互不重叠、合起来就是全站（8,193 个图包，全量约 911 页）。标题以 `(Video)` 结尾的帖子只有播放器没有图，索引时直接跳过，不占图包列表。详情页一次请求就能拿到整包图片地址（`a.msacwl-img-link` 的 `data-mfp-src`）；站点的轮播会把首尾两张各克隆一份，所以地址要去重，再按文件名尾号排序——这些站不需要 `verify`，也不存在“真实 / 标题”对不上的情况。图片就在 `mitaku.net/wp-content/uploads` 下，属于站点自身，页面不需要放宽到任意 `https:` 来源。读取节奏默认每秒一个请求，全量扫描约 8–10 分钟。
 
 抓取按源站顺序并行下载到临时目录（最多4张同时），再按原顺序写进草稿，因此草稿里的编号和源站一致。某一包在源站缺图时整包回滚：草稿被删除，失败原因显示在该图包的卡片上，可以重试。同一图包不会重复导入。
 

@@ -153,26 +153,36 @@ func TestWordPressSitesReadsTheImageSource(t *testing.T) {
 	}
 }
 
-func TestWordPressSitesReadsTheAcgmhnEngine(t *testing.T) {
-	t.Setenv("XRW_WP_BASE", "")
-	t.Setenv("XRW_WP_SITES", "acgmhn|ACG漫画|https://www.acgmhn.com|acgmhn,cosplaytele-com|Cosplaytele|https://cosplaytele.com")
-	sites, err := wordpressSites()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sites) != 2 {
-		t.Fatalf("expected two sites, got %+v", sites)
-	}
-	// A site that publishes no API at all names its reader the same way a
-	// WordPress site names its image source.
-	if sites[0].ImageSource != "acgmhn" {
-		t.Fatalf("the acgmhn engine was not read: %+v", sites[0])
-	}
-	if sites[0].BaseURL != "https://www.acgmhn.com" {
-		t.Fatalf("the other fields shifted: %+v", sites[0])
-	}
-	if sites[1].ImageSource != "media" {
-		t.Fatalf("an entry without an engine should stay on media: %+v", sites[1])
+// TestWordPressSitesReadsTheNamedEngine pins that a site naming a reader other
+// than the media endpoint gets it: the field is the fourth one in the entry and
+// the rest of the entry has to survive it.
+func TestWordPressSitesReadsTheNamedEngine(t *testing.T) {
+	for name, testCase := range map[string]struct{ entry, engine, base string }{
+		"acgmhn": {"acgmhn|ACG漫画|https://www.acgmhn.com|acgmhn", "acgmhn", "https://www.acgmhn.com"},
+		"mitaku": {"mitaku|Mitaku|https://mitaku.net|mitaku", "mitaku", "https://mitaku.net"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("XRW_WP_BASE", "")
+			t.Setenv("XRW_WP_SITES", testCase.entry+",cosplaytele-com|Cosplaytele|https://cosplaytele.com")
+			sites, err := wordpressSites()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sites) != 2 {
+				t.Fatalf("expected two sites, got %+v", sites)
+			}
+			// A site that publishes no API at all names its reader the same way a
+			// WordPress site names its image source.
+			if sites[0].ImageSource != testCase.engine {
+				t.Fatalf("the %s engine was not read: %+v", name, sites[0])
+			}
+			if sites[0].BaseURL != testCase.base {
+				t.Fatalf("the other fields shifted: %+v", sites[0])
+			}
+			if sites[1].ImageSource != "media" {
+				t.Fatalf("an entry without an engine should stay on media: %+v", sites[1])
+			}
+		})
 	}
 }
 

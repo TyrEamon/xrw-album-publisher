@@ -142,8 +142,10 @@ func (s *fakeGallerySite) handle(response http.ResponseWriter, request *http.Req
 			}
 		}
 		s.writeList(response, items)
-	case path == "/categories", path == "/tags":
+	case path == "/categories":
 		s.writeList(response, []siteTerm{{ID: 7, Slug: "cosplay", Name: "Cosplay", Count: 3}})
+	case path == "/tags":
+		s.writeList(response, []siteTerm{{ID: 11, Slug: "byoru", Name: "Byoru", Count: 3}})
 	default:
 		http.NotFound(response, request)
 	}
@@ -276,7 +278,7 @@ func alphaGallery(t *testing.T) *fakeGallerySite {
 		ID: 100, Slug: "alpha", Link: "https://example.com/alpha/",
 		Date: "2026-10-01T10:00:00", Modified: "2026-10-01T10:00:00",
 		Title: siteRendered{Rendered: "Alpha cosplay 3 photos"}, FeaturedMedia: 1004,
-		Categories: []int{7},
+		Categories: []int{7}, Tags: []int{11},
 	}}
 	site.media[100] = []siteMedia{
 		{ID: 1001, Slug: firstSlug, Source: firstURL, Mime: "image/png"},
@@ -367,6 +369,22 @@ func TestSiteImportFillsADraftInGalleryOrder(t *testing.T) {
 	}
 	if fixture.site.uploads != 3 {
 		t.Fatalf("expected exactly 3 image downloads, got %d", fixture.site.uploads)
+	}
+}
+
+// TestSiteImportPrefillsTheGalleryTags covers the default the import dialog opens
+// with: a gallery carries its tags as ids, and the draft has to carry the names so
+// the caption can turn them into hashtags without anyone retyping them.
+func TestSiteImportPrefillsTheGalleryTags(t *testing.T) {
+	fixture := newSiteFixture(t)
+	draft, err := fixture.importer.Import(context.Background(), SiteImportRequest{
+		SiteID: siteTestID, PostID: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Tags) != 1 || draft.Tags[0] != "Byoru" {
+		t.Fatalf("the gallery's own tag should be prefilled, got %+v", draft.Tags)
 	}
 }
 
